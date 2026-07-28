@@ -1,0 +1,47 @@
+{
+  "name": "pptx-to-html",
+  "version": "1.0.1",
+  "description": "Convert PowerPoint (.pptx) slides to self-contained HTML files (Node.js port of the C# PptxToHtml tool).",
+  "keywords": [
+    "pptx",
+    "powerpoint",
+    "html",
+    "ooxml",
+    "converter"
+  ],
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "./src/index.js",
+  "module": "./esm/index.mjs",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./esm/index.d.mts",
+        "default": "./esm/index.mjs"
+      },
+      "require": {
+        "types": "./src/index.d.ts",
+        "default": "./src/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "bin",
+    "esm",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.10",
+    "fflate": "^0.8.3"
+  },
+  "bin": {
+    "pptx-to-html": "./bin/cli.js"
+  }
+}

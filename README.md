@@ -1,4 +1,4 @@
-# pptx-to-html-conv
+# Pptx to HTML Converter
 
 Convert PowerPoint (`.pptx`) slides into self-contained HTML files (SVG +
 `foreignObject` text), with embedded fonts, extracted images/media, and an

@@ -1,6 +1,6 @@
 {
   "name": "pptx-to-html-conv",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Convert PowerPoint (.pptx) slides to self-contained HTML files (Node.js port of the C# PptxToHtml tool).",
   "keywords": [
     "pptx",
@@ -10,6 +10,15 @@
     "converter"
   ],
   "license": "MIT",
+  "author": "raksa <eng.raksa@gmail.com>",
+  "homepage": "https://github.com/raksa/pptx-to-html-conv-dist#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raksa/pptx-to-html-conv-dist.git"
+  },
+  "bugs": {
+    "url": "https://github.com/raksa/pptx-to-html-conv-dist/issues"
+  },
   "type": "commonjs",
   "main": "./src/index.js",
   "module": "./esm/index.mjs",

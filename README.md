@@ -15,6 +15,20 @@ npm install pptx-to-html
 
 Requires Node.js >= 18.
 
+### Releasing to npm
+
+For maintainers, from a clean `main`:
+
+```bash
+npm test
+npm pack --dry-run                          # check which files go in the package
+npm whoami                                  # run `npm login` if this fails
+npm version patch --tag-version-prefix=""   # or minor / major
+npm publish
+git push origin main --follow-tags
+npm view pptx-to-html version               # confirm the new version is live
+```
+
 ## Usage
 
 ESM:

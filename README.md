@@ -1,4 +1,4 @@
-# pptx-to-html
+# pptx-to-html-conv
 
 Convert PowerPoint (`.pptx`) slides into self-contained HTML files (SVG +
 `foreignObject` text), with embedded fonts, extracted images/media, and an
@@ -10,7 +10,7 @@ to the reference implementation (apart from the `exportedAt` timestamp).
 ## Install
 
 ```bash
-npm install pptx-to-html
+npm install pptx-to-html-conv
 ```
 
 Requires Node.js >= 18.
@@ -26,7 +26,7 @@ npm whoami                                  # run `npm login` if this fails
 npm version patch --tag-version-prefix=""   # or minor / major
 npm publish
 git push origin main --follow-tags
-npm view pptx-to-html version               # confirm the new version is live
+npm view pptx-to-html-conv version          # confirm the new version is live
 ```
 
 ## Usage
@@ -34,7 +34,7 @@ npm view pptx-to-html version               # confirm the new version is live
 ESM:
 
 ```js
-import { exportPptx, getSlidesCount } from 'pptx-to-html';
+import { exportPptx, getSlidesCount } from 'pptx-to-html-conv';
 
 exportPptx('deck.pptx', 'out/deck');
 console.log(getSlidesCount('deck.pptx'));
@@ -43,7 +43,7 @@ console.log(getSlidesCount('deck.pptx'));
 CommonJS:
 
 ```js
-const { exportPptx, getSlidesCount } = require('pptx-to-html');
+const { exportPptx, getSlidesCount } = require('pptx-to-html-conv');
 
 exportPptx('deck.pptx', 'out/deck', null /* or a path to eot2ttf */);
 ```
@@ -51,7 +51,7 @@ exportPptx('deck.pptx', 'out/deck', null /* or a path to eot2ttf */);
 TypeScript (declarations ship with the package — nothing extra to install):
 
 ```ts
-import { exportPptx, getSlidesCount, getVersion } from 'pptx-to-html';
+import { exportPptx, getSlidesCount, getVersion } from 'pptx-to-html-conv';
 
 const slides: number = getSlidesCount('deck.pptx');
 exportPptx('deck.pptx', 'out/deck');
@@ -60,7 +60,7 @@ exportPptx('deck.pptx', 'out/deck');
 ## CLI
 
 ```bash
-npx pptx-to-html --file <input.pptx> [--out <output-folder>] [--eot2ttf <path>]
+npx pptx-to-html-conv --file <input.pptx> [--out <output-folder>] [--eot2ttf <path>]
 ```
 
 - `--file` — path to the `.pptx` file (required)

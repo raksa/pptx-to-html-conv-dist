@@ -1,6 +1,6 @@
 {
-  "name": "pptx-to-html",
-  "version": "1.0.2",
+  "name": "pptx-to-html-conv",
+  "version": "1.0.1",
   "description": "Convert PowerPoint (.pptx) slides to self-contained HTML files (Node.js port of the C# PptxToHtml tool).",
   "keywords": [
     "pptx",
@@ -42,6 +42,6 @@
     "fflate": "^0.8.3"
   },
   "bin": {
-    "pptx-to-html": "./bin/cli.js"
+    "pptx-to-html-conv": "./bin/cli.js"
   }
 }

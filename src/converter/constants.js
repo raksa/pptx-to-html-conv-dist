@@ -23,7 +23,7 @@ module.exports = {
   TextShadowBlurScale: 0.72,
   TextShadowOpacityScale: 0.68,
 
-  // `pkg.name` is the npm id ("pptx-to-html"); info.json must carry the same
+  // `pkg.name` is the npm id ("pptx-to-html-conv"); info.json must carry the same
   // tool name the C# port writes, so it stays a literal here.
   ToolName: 'PptxToHtml',
   ToolVersion: pkg.version,

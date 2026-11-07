@@ -22,7 +22,7 @@ function main(argv) {
 
   const inputPath = parsed.get('--file');
   if (inputPath == null || inputPath === '') {
-    console.error('Usage: pptx-to-html --file <input.pptx> [--out <output-folder>] [--eot2ttf <path>]');
+    console.error('Usage: pptx-to-html-conv --file <input.pptx> [--out <output-folder>] [--eot2ttf <path>]');
     return 1;
   }
 

@@ -9,7 +9,12 @@ module.exports = {
   // CSS line-height ratio fallbacks (see PptxConverter.cs comments).
   DefaultPptLineHeightRatio: 1.2,
   DefaultLineHeightRatio: 1.4,
-  HalfLeadingCompensationFactor: 1.0,
+  // Share of the CSS half-leading by which the first line of a top-anchored text box
+  // with expanded line spacing is pushed down (see TextRenderer).
+  FirstLineLeadingShiftFactor: 0.5,
+  // Baseline of a WordArt-warped line, as a share of its band from the top (see
+  // TextRenderer.renderWarpedTextBody).
+  WarpBaselineRatio: 0.8,
 
   // Random-bars slide transition tuning.
   RandomBarsRevealDurationFraction: 0.55,

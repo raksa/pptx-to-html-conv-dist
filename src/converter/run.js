@@ -36,9 +36,10 @@ function distinctOic(list) {
 }
 
 module.exports = {
-  run(presentationPart, slideRelIds, outputDir, inputPath, toolName, toolVersion, exportedAt, eot2ttfPath = null) {
+  run(presentationPart, slideRelIds, outputDir, inputPath, toolName, toolVersion, exportedAt, eot2ttfPath = null, noBackground = false) {
     this._outputDir = outputDir;
     this._eot2ttfToolPath = eot2ttfPath;
+    this._noBackground = noBackground;
     this._imageCounter = 0;
     this._mediaCounter = 0;
     this._savedImagePaths.clear();
@@ -72,7 +73,7 @@ module.exports = {
       process.stdout.write(`[${i + 1}/${slideRelIds.length}] Converting slide ${i + 1}... `);
       const previousSlidePart = i > 0 ? presentationPart.getPartById(slideRelIds[i - 1]) : null;
       const slidePart = presentationPart.getPartById(slideRelIds[i]);
-      const animationInfo = this.extractSlideAnimationInfo(slidePart);
+      const animationInfo = this.extractSlideAnimationInfo(slidePart, slideWidthPx, slideHeightPx);
       const transitionInfo = this.extractSlideTransitionInfo(slidePart);
       const transitionRenderInfo = this.extractSlideTransitionShapeRenderInfo(previousSlidePart, slidePart, transitionInfo);
 
@@ -188,6 +189,76 @@ module.exports = {
     sb.appendLine('@keyframes pptxScaleXGrowLoop { 0% { transform:scaleX(0.75); } 50% { transform:scaleX(1); } 100% { transform:scaleX(0.75); } }');
   },
 
+  // Keyframes for motion paths; only emitted by stages that play one, so other slides'
+  // markup is unchanged.
+  appendMotionPathCss(sb, animatedShapeStylesByShapeId) {
+    if (animatedShapeStylesByShapeId == null) return;
+    if (!Array.from(animatedShapeStylesByShapeId.values()).some((style) => style.includes('pptxMotionPath'))) return;
+    sb.appendLine('@keyframes pptxMotionPath { from { transform:translate(var(--pptx-motion-from-x, 0px), var(--pptx-motion-from-y, 0px)); } to { transform:translate(var(--pptx-motion-to-x, 0px), var(--pptx-motion-to-y, 0px)); } }');
+  },
+
+  // Keyframes for position animations (Fly In, Float In…); only emitted by stages that play one.
+  // They move the separate translate property, so they combine with any transform animation
+  // (motion path, swivel, grow) on the same target instead of replacing it.
+  appendFlyInCss(sb, animatedShapeStylesByShapeId) {
+    if (animatedShapeStylesByShapeId == null) return;
+    if (!Array.from(animatedShapeStylesByShapeId.values()).some((style) => style.includes('pptxFlyIn'))) return;
+    sb.appendLine('@keyframes pptxFlyIn { from { translate:var(--pptx-fly-from-x, 0px) var(--pptx-fly-from-y, 0px); } to { translate:0px 0px; } }');
+  },
+
+  // A paragraph's Fly In starts relative to the paragraph's own box, which only the browser
+  // knows. This measures the elements whose start offset uses --pptx-box-*, grouped by their
+  // --pptx-fly-box key (a paragraph split at line breaks is several elements but one box), in
+  // slide px. As in PowerPoint the box starts above the text by the paragraph's space before
+  // (--pptx-space-before, even on a first paragraph). It measures again once web fonts have
+  // loaded, since they can move the text.
+  appendFlyInBoxScript(sb, animatedShapeStylesByShapeId) {
+    if (animatedShapeStylesByShapeId == null) return;
+    if (!Array.from(animatedShapeStylesByShapeId.values()).some((style) => style.includes('var(--pptx-box-'))) return;
+
+    sb.appendLine(`<script>`);
+    sb.appendLine(`(() => {`);
+    sb.appendLine(`  const measureFlyInBoxes = () => {`);
+    sb.appendLine(`    const slide = document.querySelector('.slide');`);
+    sb.appendLine(`    if (!slide) return;`);
+    sb.appendLine(`    const slideRect = slide.getBoundingClientRect();`);
+    sb.appendLine(`    const scale = slide.offsetWidth > 0 ? slideRect.width / slide.offsetWidth : 1;`);
+    sb.appendLine(`    const groups = new Map();`);
+    sb.appendLine(`    for (const element of document.querySelectorAll('[style*="var(--pptx-box-"]')) {`);
+    sb.appendLine(`      const key = element.style.getPropertyValue('--pptx-fly-box').trim();`);
+    sb.appendLine(`      if (!groups.has(key)) groups.set(key, []);`);
+    sb.appendLine(`      groups.get(key).push(element);`);
+    sb.appendLine(`    }`);
+    sb.appendLine(`    for (const elements of groups.values()) {`);
+    sb.appendLine(`      let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;`);
+    sb.appendLine(`      for (const element of elements) element.style.setProperty('translate', 'none', 'important');`);
+    sb.appendLine(`      for (const element of elements) {`);
+    sb.appendLine(`        const rect = element.getBoundingClientRect();`);
+    sb.appendLine(`        if (rect.width === 0 && rect.height === 0) continue;`);
+    sb.appendLine(`        left = Math.min(left, rect.left);`);
+    sb.appendLine(`        top = Math.min(top, rect.top);`);
+    sb.appendLine(`        right = Math.max(right, rect.right);`);
+    sb.appendLine(`        bottom = Math.max(bottom, rect.bottom);`);
+    sb.appendLine(`      }`);
+    sb.appendLine(`      const before = parseFloat(elements[0].style.getPropertyValue('--pptx-space-before')) || 0;`);
+    sb.appendLine(`      for (const element of elements) element.style.removeProperty('translate');`);
+    sb.appendLine(`      if (left > right) continue;`);
+    sb.appendLine(`      const boxTop = (top - slideRect.top) / scale - before;`);
+    sb.appendLine(`      const boxBottom = (bottom - slideRect.top) / scale;`);
+    sb.appendLine(`      for (const element of elements) {`);
+    sb.appendLine(`        element.style.setProperty('--pptx-box-left', (left - slideRect.left) / scale + 'px');`);
+    sb.appendLine(`        element.style.setProperty('--pptx-box-top', boxTop + 'px');`);
+    sb.appendLine(`        element.style.setProperty('--pptx-box-width', (right - left) / scale + 'px');`);
+    sb.appendLine(`        element.style.setProperty('--pptx-box-height', boxBottom - boxTop + 'px');`);
+    sb.appendLine(`      }`);
+    sb.appendLine(`    }`);
+    sb.appendLine(`  };`);
+    sb.appendLine(`  measureFlyInBoxes();`);
+    sb.appendLine(`  if (document.fonts) document.fonts.ready.then(measureFlyInBoxes);`);
+    sb.appendLine(`})();`);
+    sb.appendLine(`</script>`);
+  },
+
   convertSlideToHtml(
     slidePart,
     presentationPart,
@@ -202,8 +273,14 @@ module.exports = {
   ) {
     const slideTransitionStyle = this.buildSlideTransitionStyle(slideTransitionInfo);
     const renderRandomBars = slideTransitionInfo != null && (slideTransitionInfo.type || '').toLowerCase() === 'random';
+    // Without a background the current slide cannot cover the previous one, which would
+    // then stay visible through it, so transitions play over the host page instead.
     const renderPreviousSlideLayer =
-      previousSlidePart != null && (slideTransitionStyle.trim() !== '' || renderRandomBars);
+      previousSlidePart != null && !this._noBackground && (slideTransitionStyle.trim() !== '' || renderRandomBars);
+    // Curtains: the current slide stays still underneath and the previous slide, split into
+    // two curtains, is drawn aside on top of it.
+    const renderCurtains =
+      previousSlidePart != null && slideTransitionInfo != null && (slideTransitionInfo.type || '').toLowerCase() === 'curtains';
     const slideTransitionAttributes =
       slideTransitionInfo != null && slideTransitionInfo.type && slideTransitionInfo.type.trim() !== ''
         ? ` data-pptx-transition-type="${slideTransitionInfo.type}" data-pptx-transition-duration-ms="${Math.max(0, slideTransitionInfo.durationMs)}"`
@@ -220,7 +297,7 @@ module.exports = {
     sb.appendLine('<style>');
 
     let usedFonts = this.collectFontsFromSlide(slidePart);
-    if (renderPreviousSlideLayer && previousSlidePart != null) {
+    if ((renderPreviousSlideLayer || renderCurtains) && previousSlidePart != null) {
       usedFonts = usedFonts.concat(this.collectFontsFromSlide(previousSlidePart));
     }
 
@@ -241,6 +318,9 @@ module.exports = {
       renderRandomBars
     )
       this.appendStageAnimationCss(sb);
+    this.appendMotionPathCss(sb, animatedShapeStylesByShapeId);
+    this.appendFlyInCss(sb, animatedShapeStylesByShapeId);
+    if (renderCurtains) this.appendCurtainsTransitionCss(sb, slideWidthPx, slideHeightPx);
     sb.appendLine('</style>');
 
     const baseSvgStyle = 'display:block;overflow:hidden;position:absolute;inset:0;';
@@ -280,7 +360,13 @@ module.exports = {
         )
       );
     }
+    if (renderCurtains) {
+      sb.append(
+        this.buildCurtainsTransitionMarkup(previousSlidePart, presentationPart, slideWidthPx, slideHeightPx, slideTransitionInfo.durationMs)
+      );
+    }
     sb.appendLine('</div>');
+    this.appendFlyInBoxScript(sb, animatedShapeStylesByShapeId);
     sb.appendLine('</body>');
     sb.appendLine('</html>');
     return sb.toString();
@@ -300,6 +386,8 @@ module.exports = {
     const originalHiddenShapeIds = this._currentHiddenShapeIds;
     const originalAnimatedShapeStylesByShapeId = this._currentAnimatedShapeStylesByShapeId;
     const originalMorphPictureOverlaysByShapeId = this._currentMorphPictureOverlaysByShapeId;
+    const originalDefsSb = this._currentDefsSb;
+    const originalTextGlowFilterIds = this._textGlowFilterIds;
 
     this._currentHiddenShapeIds = hiddenShapeIds ? new Set(hiddenShapeIds) : new Set();
     this._currentAnimatedShapeStylesByShapeId = animatedShapeStylesByShapeId || new Map();
@@ -309,9 +397,13 @@ module.exports = {
       this._defsCounter = 0;
       const defsSb = new StringBuilder();
       const bodySb = new StringBuilder();
+      this._currentDefsSb = defsSb;
+      this._textGlowFilterIds = new Map();
 
-      const bgSvg = this.getSlideBackgroundSvg(slidePart, presentationPart, slideWidthPx, slideHeightPx, defsSb);
-      bodySb.appendLine(bgSvg);
+      if (!this._noBackground) {
+        const bgSvg = this.getSlideBackgroundSvg(slidePart, presentationPart, slideWidthPx, slideHeightPx, defsSb);
+        bodySb.appendLine(bgSvg);
+      }
 
       const spTree = shapeTreeOf(slidePart.root);
       if (spTree != null) {
@@ -335,6 +427,8 @@ module.exports = {
       this._currentHiddenShapeIds = originalHiddenShapeIds;
       this._currentAnimatedShapeStylesByShapeId = originalAnimatedShapeStylesByShapeId;
       this._currentMorphPictureOverlaysByShapeId = originalMorphPictureOverlaysByShapeId;
+      this._currentDefsSb = originalDefsSb;
+      this._textGlowFilterIds = originalTextGlowFilterIds;
     }
   },
 

@@ -11,12 +11,16 @@
  * @param pptxPath Path to the input .pptx file.
  * @param outputDirectory Folder to write HTML and assets into.
  * @param eot2ttfPath Path to the eot2ttf helper, or null to skip EOT font conversion.
+ * @param noBackground When true, omit slide backgrounds so slides render
+ *   transparent over the host page (transitions then play over that page
+ *   instead of over the previous slide).
  * @throws If a required argument is blank, or an input path does not exist.
  */
 export declare function exportPptx(
   pptxPath: string,
   outputDirectory: string,
-  eot2ttfPath?: string | null
+  eot2ttfPath?: string | null,
+  noBackground?: boolean
 ): void;
 
 /**
@@ -43,6 +47,7 @@ export declare class PptxConverter {
     toolName: string,
     toolVersion: string,
     exportedAt: string,
-    eot2ttfPath?: string | null
+    eot2ttfPath?: string | null,
+    noBackground?: boolean
   ): void;
 }

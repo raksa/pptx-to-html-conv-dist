@@ -4,11 +4,12 @@
 
 const { firstChild, elements, attr, childElements, innerText, NS } = require('../ooxml/dom');
 const { StringBuilder } = require('../util/stringbuilder');
-const { f0, f1, f2, f3 } = require('../util/format');
+const { f0, f1, f2, f3, fmtTrim } = require('../util/format');
 const { PRESET_COLORS } = require('./colorHelper');
 const {
   DefaultPptLineHeightRatio,
-  HalfLeadingCompensationFactor,
+  FirstLineLeadingShiftFactor,
+  WarpBaselineRatio,
   TextShadowDistanceScale,
   TextShadowBlurScale,
   TextShadowOpacityScale,
@@ -19,6 +20,28 @@ const A = NS.A;
 function num(el, name, fallback = null) {
   const v = attr(el, name);
   if (v == null) return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// HTML collapses runs of these characters (white-space: normal), so a line whose
+// text is made only of them renders with no height at all.
+function isCollapsibleWhitespace(text) {
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c !== 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0c && c !== 0x0d) return false;
+  }
+  return true;
+}
+
+// Fill choices of text run properties (EG_FillProperties), which the schema places after <a:ln>.
+const TEXT_FILL_ELEMENTS = new Set(['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill']);
+
+// Numeric attribute of an effect element, or the fallback when absent or not a number
+// (mirrors ReadEffectNumber's double.TryParse in the C# tool).
+function readEffectNumber(el, name, fallback) {
+  const v = attr(el, name);
+  if (v == null || v.trim() === '') return fallback;
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -37,7 +60,9 @@ module.exports = {
       if (a !== '') { textBodyDefaultAlign = a; break; }
     }
 
+    let paragraphIndex = -1;
     for (const para of elements(textBody, 'p', A)) {
+      paragraphIndex++;
       const pPr = firstChild(para, 'pPr');
       const paraLevel = num(pPr, 'lvl', 0) || 0;
       const levelProps = this.getLevelParagraphProperties(localLstStyle, paraLevel);
@@ -72,9 +97,11 @@ module.exports = {
           const bs = this._resolveBulletStyling(pPr, bulletColor, bulletSizePct, bulletFont);
           bulletColor = bs.color; bulletSizePct = bs.sizePct; bulletFont = bs.font;
           const fb = this._resolveBulletStyling(effectiveBulletSource, '', 1.0, '');
-          if (bulletColor === '') bulletColor = fb.color;
-          if (bulletFont === '') bulletFont = fb.font;
-          if (bulletSizePct === 1.0 && fb.sizePct !== 1.0) bulletSizePct = fb.sizePct;
+          // buClrTx / buFontTx / buSzTx on the paragraph mean "follow the text", which
+          // overrides whatever the inherited list style would supply.
+          if (bulletColor === '' && firstChild(pPr, 'buClrTx') == null) bulletColor = fb.color;
+          if (bulletFont === '' && firstChild(pPr, 'buFontTx') == null) bulletFont = fb.font;
+          if (bulletSizePct === 1.0 && fb.sizePct !== 1.0 && firstChild(pPr, 'buSzTx') == null) bulletSizePct = fb.sizePct;
         } else if (pBuAutoNum != null) {
           hasBullet = true;
           const curType = attr(pBuAutoNum, 'type');
@@ -136,11 +163,16 @@ module.exports = {
         inherited.runProps
       );
 
+      // Paragraph spacing is inherited one property at a time: a list-style level that exists
+      // but omits lnSpc/spcBef must not hide the value a lower level (e.g. the master's body
+      // style under a layout placeholder's own level) defines.
+      const spacingSources = [levelProps, inheritedLevelProps, fallbackLevelProps, inherited.bulletParaProps];
+
       // Line spacing.
       let lnSpcStyle = '';
       let cssLineHeightRatio = 0;
       const paraLnSpc = firstChild(pPr, 'lnSpc');
-      const inhLnSpc = firstChild(effectiveBulletSource, 'lnSpc');
+      const inhLnSpc = this._findInheritedParagraphChild(spacingSources, 'lnSpc');
       const effectiveLnSpc = paraLnSpc || inhLnSpc;
 
       const paraLHRatio = this.getParagraphLineHeightRatio(para, effectiveDefRunProps);
@@ -170,7 +202,10 @@ module.exports = {
 
       // Space before.
       let spacingStyle = '';
-      const effectiveSpcBef = firstChild(pPr, 'spcBef') || firstChild(effectiveBulletSource, 'spcBef');
+      // The space before in pt, also on a first paragraph (where it isn't laid out): a
+      // paragraph's animation box includes it.
+      let spaceBeforePt = 0;
+      const effectiveSpcBef = firstChild(pPr, 'spcBef') || this._findInheritedParagraphChild(spacingSources, 'spcBef');
       if (effectiveSpcBef != null) {
         const spcPct = firstChild(effectiveSpcBef, 'spcPct');
         const spcPts = firstChild(effectiveSpcBef, 'spcPts');
@@ -184,10 +219,16 @@ module.exports = {
           if (spcMaxFontPt === 0 && effectiveDefRunProps != null && attr(effectiveDefRunProps, 'sz') != null)
             spcMaxFontPt = (num(effectiveDefRunProps, 'sz') / 100.0) * fontScale;
           const spcBefPt = spcBefPct * DefaultPptLineHeightRatio * spcMaxFontPt;
-          if (spcBefPt > 0) spacingStyle = `margin-top:${f1(spcBefPt)}pt;`;
+          if (spcBefPt > 0) {
+            spacingStyle = `margin-top:${f1(spcBefPt)}pt;`;
+            spaceBeforePt = spcBefPt;
+          }
         } else if (spcPts != null && attr(spcPts, 'val') != null) {
           const pts = num(spcPts, 'val') / 100.0;
-          if (pts > 0) spacingStyle = `margin-top:${f1(pts)}pt;`;
+          if (pts > 0) {
+            spacingStyle = `margin-top:${f1(pts)}pt;`;
+            spaceBeforePt = pts;
+          }
         }
       }
 
@@ -221,6 +262,11 @@ module.exports = {
       if (bulletMargin !== '') combinedParaStyle += (combinedParaStyle !== '' ? ';' : '') + bulletMargin;
       if (!isFirstParagraph && spacingStyle !== '') combinedParaStyle += (combinedParaStyle !== '' ? ';' : '') + spacingStyle;
 
+      // First line of a top-anchored text box with expanded line spacing. CSS centres each
+      // line in its line box (half the extra leading above it, half below); PowerPoint puts
+      // more of it above the first line. Measured against PowerPoint's own video export
+      // (130–300% spacing), its first line sits a further half of the CSS half-leading lower
+      // while later lines keep the CSS pitch, so only the first paragraph is shifted down.
       if (isFirstParagraph && compensateLeading && cssLineHeightRatio > paraLHRatio) {
         let maxFontPt = 0;
         for (const fpRun of elements(para, 'r', A)) {
@@ -231,24 +277,39 @@ module.exports = {
           maxFontPt = (num(effectiveDefRunProps, 'sz') / 100.0) * fontScale;
 
         if (maxFontPt > 0) {
-          const halfLeadingPt = ((cssLineHeightRatio - paraLHRatio) / 2.0) * maxFontPt * HalfLeadingCompensationFactor;
-          combinedParaStyle += (combinedParaStyle !== '' ? ';' : '') + `margin-top:-${f1(halfLeadingPt)}pt`;
+          const halfLeadingPt = ((cssLineHeightRatio - paraLHRatio) / 2.0) * maxFontPt;
+          combinedParaStyle += (combinedParaStyle !== '' ? ';' : '') + `margin-top:${f1(halfLeadingPt * FirstLineLeadingShiftFactor)}pt`;
         }
       }
 
-      // Per-segment (break-separated) max run font sizes.
+      // Per-segment (break-separated) metrics. PowerPoint gives every line a height even when
+      // it shows no text: such a line is sized by its runs, or failing that by the <a:br> that
+      // ends it (the paragraph's last line: by <a:endParaRPr>). HTML collapses a line with no
+      // visible text to nothing, so those segments get an explicit &nbsp; filler.
       const segmentMaxFontPts = [];
+      const segmentFillerFontPts = [];
+      const segmentIsBlank = [];
       {
         let sMax = 0;
+        let sBlank = true;
+        const closeSegment = (terminatorRPr) => {
+          const terminatorPt = attr(terminatorRPr, 'sz') != null ? (num(terminatorRPr, 'sz') / 100.0) * fontScale : 0;
+          segmentMaxFontPts.push(sBlank && sMax === 0 ? terminatorPt : sMax);
+          segmentFillerFontPts.push(sMax > 0 ? sMax : terminatorPt);
+          segmentIsBlank.push(sBlank);
+          sMax = 0;
+          sBlank = true;
+        };
         for (const child of childElements(para)) {
-          if (child.localName === 'r' && attr(firstChild(child, 'rPr'), 'sz') != null) {
-            sMax = Math.max(sMax, (num(firstChild(child, 'rPr'), 'sz') / 100.0) * fontScale);
+          if (child.localName === 'r') {
+            if (attr(firstChild(child, 'rPr'), 'sz') != null)
+              sMax = Math.max(sMax, (num(firstChild(child, 'rPr'), 'sz') / 100.0) * fontScale);
+            if (!isCollapsibleWhitespace(innerText(firstChild(child, 't')) || '')) sBlank = false;
           } else if (child.localName === 'br') {
-            segmentMaxFontPts.push(sMax);
-            sMax = 0;
+            closeSegment(firstChild(child, 'rPr'));
           }
         }
-        segmentMaxFontPts.push(sMax);
+        closeSegment(firstChild(para, 'endParaRPr'));
       }
 
       let pDefFontPt = 0;
@@ -271,10 +332,15 @@ module.exports = {
         return lnSpcStyle;
       };
 
+      // Paragraph-level animation state (a "build by paragraph" effect): not yet revealed,
+      // entering in this stage, or moved by a motion path.
+      const paragraphAnimationStyle = this._buildParagraphAnimationStyle(paragraphIndex, spaceBeforePt);
+
       const makeParaAttr = (baseStyle, segIdx) => {
         const segLnSpc = getSegmentLnSpc(segIdx);
         let s = baseStyle;
         if (segLnSpc !== '') s += (s !== '' ? ';' : '') + segLnSpc;
+        if (paragraphAnimationStyle !== '') s += (s !== '' && !s.endsWith(';') ? ';' : '') + paragraphAnimationStyle;
         return s !== '' ? ` style="${s}"` : '';
       };
 
@@ -282,13 +348,35 @@ module.exports = {
       const paraTextShadow = this.getCssPropertyValue(combinedParaStyle, 'text-shadow');
       sb.append(`<p${makeParaAttr(combinedParaStyle, 0)}>`);
 
-      const runsAny = elements(para, 'r', A).length > 0;
+      const runs = elements(para, 'r', A);
+      const runsAny = runs.length > 0;
+      const bulletShown = hasBullet && runsAny;
 
-      if (hasBullet && runsAny) {
+      const appendBlankSegmentFiller = (segIdx) => {
+        // The bullet already gives the first line of a bulleted paragraph its height.
+        if (!segmentIsBlank[segIdx] || (bulletShown && segIdx === 0)) return;
+        // A line no larger than the paragraph default is already sized by the <p> itself
+        // (getSegmentLnSpc pins smaller lines to a pt line-height); a smaller span here
+        // would only add baseline-alignment slack against the <p> strut. Larger lines
+        // need a span of their own size to grow the line box.
+        const fillerPt = segmentFillerFontPts[segIdx];
+        if (fillerPt > 0 && (pDefFontPt <= 0 || fillerPt > pDefFontPt + 0.5))
+          sb.append(`<span style="font-size:${f1(fillerPt)}pt">&nbsp;</span>`);
+        else sb.append('&nbsp;');
+      };
+
+      if (bulletShown) {
+        // Bullet color, size and font follow the paragraph's first run unless the bullet sets
+        // its own (PowerPoint's buClrTx / buSzTx / buFontTx defaults); buSzPct scales that size.
+        const firstRunProps = firstChild(runs[0], 'rPr');
+        const firstRunStyle = this.getRunStyle(firstRunProps, fontScale);
         let buStyle = '';
-        if (bulletFont !== '') buStyle += `font-family:${this.buildCssFontFamily(bulletFont)};`;
-        if (bulletColor !== '') buStyle += `color:${bulletColor};`;
-        if (bulletSizePct !== 1.0) buStyle += `font-size:${f0(bulletSizePct * 100)}%;`;
+        const buFontFamily = bulletFont !== '' ? this.buildCssFontFamily(bulletFont) : this.getCssPropertyValue(firstRunStyle, 'font-family');
+        if (buFontFamily !== '') buStyle += `font-family:${buFontFamily};`;
+        const buColor = bulletColor !== '' ? bulletColor : this.getCssPropertyValue(firstRunStyle, 'color');
+        if (buColor !== '' && buColor !== 'transparent') buStyle += `color:${buColor};`;
+        if (attr(firstRunProps, 'sz') != null) buStyle += `font-size:${f1((num(firstRunProps, 'sz') / 100.0) * fontScale * bulletSizePct)}pt;`;
+        else if (bulletSizePct !== 1.0) buStyle += `font-size:${f0(bulletSizePct * 100)}%;`;
 
         const bulletText = this.encode(bulletChar);
         if (buStyle !== '') sb.append(`<span style="${buStyle}">${bulletText}</span>`);
@@ -301,7 +389,8 @@ module.exports = {
           if (child.localName === 'r') {
             let spanStyle = this.getRunStyle(firstChild(child, 'rPr'), fontScale);
             spanStyle = this.promoteShadowToDropShadowForHighlight(spanStyle, paraTextShadow);
-            const text = this.encode(innerText(firstChild(child, 't')) || '');
+            const rawText = innerText(firstChild(child, 't')) || '';
+            const text = this._wrapTextReflection(firstChild(child, 'rPr'), this.encode(rawText), rawText);
             if (spanStyle === pendingStyle) {
               pendingText.append(text);
             } else {
@@ -312,6 +401,7 @@ module.exports = {
           } else if (child.localName === 'br') {
             this._flushPendingRun(sb, pendingStyle, pendingText);
             pendingStyle = null;
+            appendBlankSegmentFiller(currentSegment);
             sb.appendLine('</p>');
             currentSegment++;
             sb.append(`<p${makeParaAttr(combinedParaStyle, currentSegment)}>`);
@@ -327,7 +417,8 @@ module.exports = {
             const rPr = firstChild(child, 'rPr');
             let spanStyle = this.getRunStyle(rPr, fontScale);
             spanStyle = this.promoteShadowToDropShadowForHighlight(spanStyle, paraTextShadow);
-            const text = this.encode(innerText(firstChild(child, 't')) || '');
+            const rawText = innerText(firstChild(child, 't')) || '';
+            const text = this._wrapTextReflection(firstChild(child, 'rPr'), this.encode(rawText), rawText);
 
             if (spanStyle === pendingStyle) {
               pendingText.append(text);
@@ -339,6 +430,7 @@ module.exports = {
           } else if (child.localName === 'br') {
             this._flushPendingRun(sb, pendingStyle, pendingText);
             pendingStyle = null;
+            appendBlankSegmentFiller(currentSegment);
             sb.appendLine('</p>');
             currentSegment++;
             sb.append(`<p${makeParaAttr(combinedParaStyle, currentSegment)}>`);
@@ -347,14 +439,42 @@ module.exports = {
         this._flushPendingRun(sb, pendingStyle, pendingText);
       }
 
-      const breaksAny = elements(para, 'br', A).length > 0;
-      if (!runsAny && !breaksAny) {
-        sb.append('&nbsp;');
-      }
+      // An empty or whitespace-only last line still occupies a line
+      appendBlankSegmentFiller(currentSegment);
 
       sb.appendLine('</p>');
       isFirstParagraph = false;
     }
+  },
+
+  /**
+   * Style for paragraph `paragraphIndex` of the shape being rendered, from its
+   * "<shape id>#<paragraph>" animation key. A paragraph not yet built in stays in the layout
+   * but is invisible, as in PowerPoint, so revealing it never reflows the other lines.
+   * A paragraph whose Fly In box the browser measures also gets its space before (px), which
+   * PowerPoint counts in that box even on a first paragraph, where no margin shows it.
+   */
+  _buildParagraphAnimationStyle(paragraphIndex, spaceBeforePt = 0) {
+    if (!this._currentTextShapeId) return '';
+
+    const paragraphKey = `${this._currentTextShapeId}#${paragraphIndex}`;
+    let style = this._currentHiddenShapeIds.has(paragraphKey) ? 'visibility:hidden;' : '';
+    if (this._currentAnimatedShapeStylesByShapeId.has(paragraphKey)) {
+      const animationStyle = this._currentAnimatedShapeStylesByShapeId.get(paragraphKey);
+      if (spaceBeforePt > 0 && animationStyle.includes('--pptx-fly-box:'))
+        style += `--pptx-space-before:${f1((spaceBeforePt * 96.0) / 72.0)}px;`;
+      style += animationStyle;
+    }
+    return style;
+  },
+
+  /** First `childName` child found on the given paragraph-property sources, in order. */
+  _findInheritedParagraphChild(sources, childName) {
+    for (const source of sources) {
+      const child = firstChild(source, childName);
+      if (child != null) return child;
+    }
+    return null;
   },
 
   _flushPendingRun(sb, style, text) {
@@ -429,6 +549,9 @@ module.exports = {
       if (linkHex && linkHex.trim() !== '') styles.push(`color:#${linkHex}`);
     }
 
+    const outlineStyle = this._getTextOutlineCss(rPr);
+    if (outlineStyle !== '') styles.push(outlineStyle);
+
     const highlight = firstChild(rPr, 'highlight');
     if (highlight != null) {
       const hlColor = this.getColorFromHighlight(highlight);
@@ -473,33 +596,253 @@ module.exports = {
       } else {
         styles.push('text-shadow:none');
       }
+
+      const glowFilterId = this._getTextGlowFilterId(firstChild(effects, 'glow'));
+      if (glowFilterId !== '') styles.push(`filter:url(#${glowFilterId})`);
     }
 
     return styles.join(';');
   },
 
   _getShadowCssColor(outerShdw) {
-    let hexWithOptionalAlpha = '00000080';
+    // PowerPoint default shadow color is black at 50% opacity when not specified.
+    return this._cssColorFromHexWithAlpha(this._resolveEffectColorHex(outerShdw, '00000080'));
+  },
 
-    const srgb = firstChild(outerShdw, 'srgbClr');
-    if (srgb != null && attr(srgb, 'val') != null) {
-      hexWithOptionalAlpha = this.applyColorTransforms(attr(srgb, 'val'), childElements(srgb));
-    } else {
-      const scheme = firstChild(outerShdw, 'schemeClr');
-      if (scheme != null && attr(scheme, 'val') != null) {
-        const hex = this.resolveSchemeColor(attr(scheme, 'val'));
-        hexWithOptionalAlpha = this.applyColorTransforms(hex, childElements(scheme));
-      } else {
-        const preset = firstChild(outerShdw, 'prstClr');
-        if (preset != null && attr(preset, 'val') != null && PRESET_COLORS.has(attr(preset, 'val'))) {
-          const mapped = PRESET_COLORS.get(attr(preset, 'val'));
-          const rgb = mapped.startsWith('#') ? mapped.slice(1) : mapped;
-          hexWithOptionalAlpha = this.applyColorTransforms(rgb, childElements(preset));
+  /**
+   * Color of a shadow/glow effect as RRGGBB plus an alpha byte when not opaque, or the
+   * fallback when the effect names no color.
+   */
+  _resolveEffectColorHex(effect, fallbackHexWithAlpha) {
+    const srgb = firstChild(effect, 'srgbClr');
+    if (srgb != null && attr(srgb, 'val') != null) return this.applyColorTransforms(attr(srgb, 'val'), childElements(srgb));
+
+    const scheme = firstChild(effect, 'schemeClr');
+    if (scheme != null && attr(scheme, 'val') != null)
+      return this.applyColorTransforms(this.resolveSchemeColor(attr(scheme, 'val')), childElements(scheme));
+
+    const preset = firstChild(effect, 'prstClr');
+    if (preset != null && attr(preset, 'val') != null && PRESET_COLORS.has(attr(preset, 'val'))) {
+      const mapped = PRESET_COLORS.get(attr(preset, 'val'));
+      const rgb = mapped.startsWith('#') ? mapped.slice(1) : mapped;
+      return this.applyColorTransforms(rgb, childElements(preset));
+    }
+
+    return fallbackHexWithAlpha;
+  },
+
+  /**
+   * Text outline (<a:ln> in run properties). PowerPoint strokes the glyph edge over the fill;
+   * a CSS stroke painted over the fill also cancels Chrome's synthetic bold and hollows the
+   * glyphs, so the stroke is painted behind the fill at twice the width instead, leaving the
+   * same visible outline outside the glyph. w omitted means PowerPoint's 0.75pt default and
+   * w="0" a hairline; an outline with no fill (or <a:noFill/>) draws nothing. The schema puts
+   * <a:ln> before the text fill, and PowerPoint ignores an outline written after it.
+   */
+  _getTextOutlineCss(rPr) {
+    let outline = null;
+    for (const child of childElements(rPr)) {
+      if (child.localName === 'ln') {
+        outline = child;
+        break;
+      }
+      if (TEXT_FILL_ELEMENTS.has(child.localName)) return '';
+    }
+
+    const outlineFill = firstChild(outline, 'solidFill');
+    if (outlineFill == null) return '';
+
+    const color = this.getColorFromFill(outlineFill);
+    if (color === '') return '';
+
+    const widthPx = Math.max((readEffectNumber(outline, 'w', 9525) / 914400.0) * 96.0, 0.5);
+    return `-webkit-text-stroke:${f2(widthPx * 2)}px ${color};paint-order:stroke fill`;
+  },
+
+  /**
+   * Glow (<a:glow rad=".."> + color): PowerPoint grows the glyph shape by the radius, softens
+   * it and tints it. CSS text-shadow cannot grow a shape, so the glow is an SVG filter in the
+   * current slide layer's <defs> (dilate by half the radius, blur by a quarter, flood with the
+   * color), shared by every run with the same glow. Returns '' outside a slide layer.
+   */
+  _getTextGlowFilterId(glow) {
+    if (glow == null || this._currentDefsSb == null) return '';
+
+    const radiusPx = (readEffectNumber(glow, 'rad', 0) / 914400.0) * 96.0;
+    if (radiusPx <= 0) return '';
+
+    const hexWithAlpha = this._resolveEffectColorHex(glow, '000000');
+    const colorHex = hexWithAlpha.length >= 6 ? hexWithAlpha.substring(0, 6) : '000000';
+    const opacity = hexWithAlpha.length >= 8 ? parseInt(hexWithAlpha.substring(6, 8), 16) / 255.0 : 1.0;
+    const spread = f2(radiusPx / 2);
+    const blur = f2(radiusPx / 4);
+    const opacityText = fmtTrim(opacity, 3);
+    const key = `${spread}|${blur}|${colorHex}|${opacityText}`;
+    if (this._textGlowFilterIds.has(key)) return this._textGlowFilterIds.get(key);
+
+    const id = `glow${++this._defsCounter}`;
+    this._currentDefsSb.appendLine(
+      `<filter id="${id}" x="-50%" y="-100%" width="200%" height="300%" color-interpolation-filters="sRGB">` +
+        `<feMorphology in="SourceAlpha" operator="dilate" radius="${spread}" result="spread"/>` +
+        `<feGaussianBlur in="spread" stdDeviation="${blur}" result="soft"/>` +
+        `<feFlood flood-color="#${colorHex}" flood-opacity="${opacityText}"/>` +
+        '<feComposite in2="soft" operator="in" result="glow"/>' +
+        '<feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge></filter>'
+    );
+    this._textGlowFilterIds.set(key, id);
+    return id;
+  },
+
+  /**
+   * Reflection (<a:reflection>): the run is mirrored below itself, fading from stA to endA
+   * between stPos and endPos (percent of its height) and offset by dist. The text goes in an
+   * inline-block whose box ends at the font's descent line (line-height:normal), so
+   * -webkit-box-reflect mirrors about the edge PowerPoint uses; the run's own span keeps the
+   * paragraph line height, so the line layout does not change.
+   */
+  _wrapTextReflection(rPr, encodedText, rawText) {
+    const reflection = firstChild(firstChild(rPr, 'effectLst'), 'reflection');
+    if (reflection == null || isCollapsibleWhitespace(rawText)) return encodedText;
+
+    const distancePx = (readEffectNumber(reflection, 'dist', 0) / 914400.0) * 96.0;
+    const startAlpha = readEffectNumber(reflection, 'stA', 100000) / 100000.0;
+    const endAlpha = readEffectNumber(reflection, 'endA', 0) / 100000.0;
+    const startPos = readEffectNumber(reflection, 'stPos', 0) / 1000.0;
+    const endPos = readEffectNumber(reflection, 'endPos', 100000) / 1000.0;
+
+    // dir is the direction from the text to its reflection (clockwise from +x; 90° = below).
+    const angle = (((readEffectNumber(reflection, 'dir', 5400000) / 60000.0) % 360) + 360) % 360;
+    const [side, towards] =
+      angle >= 45 && angle < 135
+        ? ['below', 'bottom']
+        : angle >= 135 && angle < 225
+        ? ['left', 'left']
+        : angle >= 225 && angle < 315
+        ? ['above', 'top']
+        : ['right', 'right'];
+
+    // The mask is laid over the run before it is mirrored, so the end nearest the mirror
+    // axis carries the start alpha.
+    const farStop = fmtTrim(100 - endPos, 3);
+    const nearStop = fmtTrim(100 - startPos, 3);
+    const mask =
+      `linear-gradient(to ${towards}, transparent ${farStop}%, ` +
+      `rgba(0,0,0,${fmtTrim(endAlpha, 3)}) ${farStop}%, ` +
+      `rgba(0,0,0,${fmtTrim(startAlpha, 3)}) ${nearStop}%)`;
+    return `<span style="display:inline-block;line-height:normal;-webkit-box-reflect:${side} ${f1(distancePx)}px ${mask}">${encodedText}</span>`;
+  },
+
+  /**
+   * Preset WordArt transform of a text body (<a:prstTxWarp prst="..">), or '' when the text
+   * is not warped ("textNoShape" is the explicit no-warp preset).
+   */
+  getTextWarpPreset(bodyPr) {
+    const warp = bodyPr == null ? null : childElements(bodyPr).find((child) => child.localName === 'prstTxWarp');
+    const preset = attr(warp, 'prst') || '';
+    return preset === 'textNoShape' ? '' : preset;
+  },
+
+  /**
+   * WordArt transform (<a:prstTxWarp>): PowerPoint bends the text into the warp's envelope,
+   * and the envelope fills the text box whatever the font size. Each line (paragraph or
+   * <a:br> segment) is drawn as SVG text stretched to the box width (textLength) and sized to
+   * an equal share of the box height; the envelope's own curve is not reproduced.
+   */
+  renderWarpedTextBody(sb, textBody, inherited, fontScale, width, height, leftInsetPx, topInsetPx, rightInsetPx, bottomInsetPx) {
+    const localLstStyle = firstChild(textBody, 'lstStyle');
+    const lines = [];
+    for (const para of elements(textBody, 'p', A)) {
+      const paraLevel = num(firstChild(para, 'pPr'), 'lvl', 0) || 0;
+      const levelDefaults = firstChild(this.getLevelParagraphProperties(localLstStyle, paraLevel), 'defRPr');
+      const inheritedDefaults = firstChild(this.getLevelPropsFromComposite(inherited.bulletStyleSource, paraLevel), 'defRPr');
+      const fallbackDefaults = firstChild(this.getLevelPropsFromComposite(inherited.fallbackStyleSource, paraLevel), 'defRPr');
+      let line = [];
+      for (const child of childElements(para)) {
+        if (child.localName === 'r') {
+          const text = innerText(firstChild(child, 't')) || '';
+          if (text === '') continue;
+          const style = this.getMergedRunStyles(
+            fontScale,
+            firstChild(child, 'rPr'),
+            levelDefaults,
+            inheritedDefaults,
+            fallbackDefaults,
+            inherited.runProps
+          );
+          line.push({ style, text });
+        } else if (child.localName === 'br') {
+          lines.push(line);
+          line = [];
         }
+      }
+      lines.push(line);
+    }
+
+    const innerWidth = width - leftInsetPx - rightInsetPx;
+    const bandHeight = (height - topInsetPx - bottomInsetPx) / lines.length;
+    if (innerWidth <= 0 || bandHeight <= 0) return;
+
+    // The line's height (DefaultPptLineHeightRatio em) fills its band.
+    const fontPx = bandHeight / DefaultPptLineHeightRatio;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].every((part) => isCollapsibleWhitespace(part.text))) continue;
+
+      const baseline = topInsetPx + bandHeight * i + bandHeight * WarpBaselineRatio;
+      sb.append(
+        `<text x="${f1(leftInsetPx)}" y="${f1(baseline)}" textLength="${f1(innerWidth)}" lengthAdjust="spacingAndGlyphs" style="font-size:${f1(fontPx)}px;fill:${this.getThemeTextColor()}">`
+      );
+      for (const part of lines[i]) sb.append(`<tspan style="${this._toSvgTextStyle(part.style)}">${this.encode(part.text)}</tspan>`);
+      sb.appendLine('</text>');
+    }
+  },
+
+  /**
+   * Run CSS (as built for HTML text) translated for an SVG tspan: color becomes fill, the
+   * text stroke becomes stroke/stroke-width, and text-shadow joins the filter list as a
+   * drop-shadow (SVG text ignores text-shadow). Sizes and spacing are left to the warp.
+   */
+  _toSvgTextStyle(cssStyle) {
+    const declarations = [];
+    const filters = [];
+    for (const declaration of cssStyle.split(';')) {
+      const colon = declaration.indexOf(':');
+      if (colon <= 0) continue;
+
+      const name = declaration.substring(0, colon).trim().toLowerCase();
+      const value = declaration.substring(colon + 1).trim();
+      switch (name) {
+        case 'color':
+          declarations.push(`fill:${value}`);
+          break;
+        case 'font-family':
+        case 'font-weight':
+        case 'font-style':
+        case 'text-decoration':
+        case 'paint-order':
+          declarations.push(`${name}:${value}`);
+          break;
+        case '-webkit-text-stroke': {
+          const space = value.indexOf(' ');
+          if (space > 0) {
+            declarations.push(`stroke:${value.substring(space + 1)}`);
+            declarations.push(`stroke-width:${value.substring(0, space)}`);
+            declarations.push('stroke-linejoin:round');
+          }
+          break;
+        }
+        case 'text-shadow':
+          if (value !== 'none') filters.push(`drop-shadow(${value})`);
+          break;
+        case 'filter':
+          filters.push(value);
+          break;
+        default:
+          break;
       }
     }
 
-    return this._cssColorFromHexWithAlpha(hexWithOptionalAlpha);
+    if (filters.length > 0) declarations.push(`filter:${filters.join(' ')}`);
+    return declarations.join(';');
   },
 
   _cssColorFromHexWithAlpha(hex) {

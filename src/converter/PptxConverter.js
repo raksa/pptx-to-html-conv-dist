@@ -40,6 +40,10 @@ class PptxConverter {
 
     // Output directory for the current run
     this._outputDir = '';
+    // When set, slides are exported with a transparent background: no slide/layout/master
+    // background fill (nor the white fallback) and no previous-slide layer under transitions,
+    // so whatever page the HTML is embedded in shows through.
+    this._noBackground = false;
     // eot2ttf tool path (or null)
     this._eot2ttfToolPath = null;
     // Unique filename counters
@@ -60,6 +64,18 @@ class PptxConverter {
 
     // SVG <defs> counter (unique ids within a single slide layer).
     this._defsCounter = 0;
+
+    // Coordinate frames of the groups currently being rendered, innermost last (see
+    // ShapeRenderer.mapGroupChildRect). Empty while rendering top-level shapes.
+    this._groupFrames = [];
+    // PPTX id of the shape whose text body is being rendered, so paragraph-level animation
+    // keys ("<shape id>#<paragraph>") can be looked up; empty outside renderShape.
+    this._currentTextShapeId = '';
+    // <defs> of the slide layer being rendered, so text effects that need an SVG filter (glow)
+    // can add one; null outside buildSlideSvgMarkup.
+    this._currentDefsSb = null;
+    // Glow filter ids already defined in the current layer, keyed by their parameters.
+    this._textGlowFilterIds = new Map();
 
     // Deterministic per-slide shape data-id generation: "<slideId>-<n>" (e.g. "1-1", "1_1-2").
     // Set (prefix + counter reset) before each convertSlideToHtml call; increments per shape group.

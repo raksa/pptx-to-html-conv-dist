@@ -128,10 +128,12 @@ module.exports = {
       if (val == null) continue;
       const v = parseInt(val, 10);
       if (child.localName === 'tint') {
+        // ECMA-376 a:tint: "a 10% tint is 10% of the input color combined with 90% white",
+        // so val is the share of the input color that survives (1% = almost white).
         const t = v / 100000.0;
-        r = clamp(bankRound(r + (255 - r) * t));
-        g = clamp(bankRound(g + (255 - g) * t));
-        b = clamp(bankRound(b + (255 - b) * t));
+        r = clamp(bankRound(255 - (255 - r) * t));
+        g = clamp(bankRound(255 - (255 - g) * t));
+        b = clamp(bankRound(255 - (255 - b) * t));
       } else if (child.localName === 'shade') {
         const s = v / 100000.0;
         r = clamp(bankRound(r * s));

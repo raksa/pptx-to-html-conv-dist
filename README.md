@@ -60,19 +60,21 @@ exportPptx('deck.pptx', 'out/deck');
 ## CLI
 
 ```bash
-npx pptx-to-html-conv --file <input.pptx> [--out <output-folder>] [--eot2ttf <path>]
+npx pptx-to-html-conv --file <input.pptx> [--out <output-folder>] [--eot2ttf <path>] [--no-background]
 ```
 
 - `--file` — path to the `.pptx` file (required)
 - `--out` — destination folder (default: `out/<deck-name>`)
 - `--eot2ttf` — path to the `eot2ttf` helper, used to convert older EOT-format
   embedded fonts to TTF (optional)
+- `--no-background` — leave out slide backgrounds so slides are transparent and
+  the page they are embedded in shows through (optional)
 
 ## API
 
 | Export | Description |
 | --- | --- |
-| `exportPptx(pptxPath, outputDirectory, eot2ttfPath?)` | Convert a deck; creates the output folder if missing. |
+| `exportPptx(pptxPath, outputDirectory, eot2ttfPath?, noBackground?)` | Convert a deck; creates the output folder if missing. `noBackground: true` exports transparent slides. |
 | `getSlidesCount(pptxPath)` | Number of slides, without converting. |
 | `getVersion()` | Tool version, as written into `info.json`. |
 | `PptxConverter` | The converter class, for driving a run directly. |

@@ -391,6 +391,8 @@ module.exports = {
       }
     }
 
+    [left, top, width, height] = this.mapGroupChildRect(left, top, width, height);
+
     if (width <= 0 || height <= 0) return;
 
     let [fillAttr, fillDefs] = this.getSvgFill(spPr, slidePart, width, height);
@@ -518,7 +520,10 @@ module.exports = {
 
     if (strokeOverlay !== '') sb.appendLine(strokeOverlay);
 
-    if (txBody != null) {
+    if (txBody != null && this.getTextWarpPreset(bodyPr) !== '') {
+      // WordArt-warped text is drawn as stretched SVG text instead of HTML
+      this.renderWarpedTextBody(sb, txBody, inherited, fontScale, width, height, lInsPx, tInsPx, rInsPx, bInsPx);
+    } else if (txBody != null) {
       const clipAttr = customClipId !== '' ? ` clip-path="url(#${customClipId})"` : '';
       const wrapStyle = isNoWrapText
         ? 'white-space:nowrap;word-wrap:normal;overflow-wrap:normal;'
@@ -527,7 +532,13 @@ module.exports = {
       sb.appendLine(
         `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;${wrapStyle}overflow:visible;${defaultTextColor}${vAlignStyle}${padStyle}${vertTextStyle}">`
       );
-      this.renderTextBody(sb, txBody, inherited, fontScale, lnSpcReduction, compensateLeading, isNoWrapText, isVerticalText);
+      const previousTextShapeId = this._currentTextShapeId;
+      this._currentTextShapeId = pptxShapeId;
+      try {
+        this.renderTextBody(sb, txBody, inherited, fontScale, lnSpcReduction, compensateLeading, isNoWrapText, isVerticalText);
+      } finally {
+        this._currentTextShapeId = previousTextShapeId;
+      }
       sb.appendLine('</div>');
       sb.appendLine('</foreignObject>');
     }
@@ -545,7 +556,7 @@ module.exports = {
     const spPr = shapePropsOf(picture);
     if (spPr == null) return;
 
-    let [left, top, width, height] = this.getTransform(spPr);
+    let [left, top, width, height] = this.mapGroupChildRect(...this.getTransform(spPr));
     if (width <= 0 || height <= 0) return;
 
     const nvPr = firstChild(firstChild(picture, 'nvPicPr'), 'nvPr');
@@ -723,10 +734,12 @@ module.exports = {
 
     const off = firstChild(xfrm, 'off');
     const ext = firstChild(xfrm, 'ext');
-    const left = this.emuToPx(attrLong(off, 'x'));
-    const top = this.emuToPx(attrLong(off, 'y'));
-    const width = this.emuToPx(attrLong(ext, 'cx'));
-    const height = this.emuToPx(attrLong(ext, 'cy'));
+    const [left, top, width, height] = this.mapGroupChildRect(
+      this.emuToPx(attrLong(off, 'x')),
+      this.emuToPx(attrLong(off, 'y')),
+      this.emuToPx(attrLong(ext, 'cx')),
+      this.emuToPx(attrLong(ext, 'cy'))
+    );
     const pptxShapeId = this.getPptxShapeId(frame) || '';
     const groupDataAttributes = this.buildSvgGroupDataAttributes(pptxShapeId);
     const hiddenStyleAttr = this.buildSvgStyleAttribute(this.buildHiddenSvgStyle(pptxShapeId));
@@ -915,10 +928,12 @@ module.exports = {
 
     const off = firstChild(xfrm, 'off');
     const ext = firstChild(xfrm, 'ext');
-    const left = this.emuToPx(attrLong(off, 'x'));
-    const top = this.emuToPx(attrLong(off, 'y'));
-    const width = this.emuToPx(attrLong(ext, 'cx'));
-    const height = this.emuToPx(attrLong(ext, 'cy'));
+    const [left, top, width, height] = this.mapGroupChildRect(
+      this.emuToPx(attrLong(off, 'x')),
+      this.emuToPx(attrLong(off, 'y')),
+      this.emuToPx(attrLong(ext, 'cx')),
+      this.emuToPx(attrLong(ext, 'cy'))
+    );
     const pptxShapeId = this.getPptxShapeId(cxnShape) || '';
     const groupDataAttributes = this.buildSvgGroupDataAttributes(pptxShapeId);
     const hiddenStyleAttr = this.buildSvgStyleAttribute(this.buildHiddenSvgStyle(pptxShapeId));
@@ -1085,22 +1100,54 @@ module.exports = {
     if (xfrm == null) return;
 
     const off = firstChild(xfrm, 'off');
-    const left = this.emuToPx(attrLong(off, 'x'));
-    const top = this.emuToPx(attrLong(off, 'y'));
+    const ext = firstChild(xfrm, 'ext');
+    const [left, top, width, height] = this.mapGroupChildRect(
+      this.emuToPx(attrLong(off, 'x')),
+      this.emuToPx(attrLong(off, 'y')),
+      this.emuToPx(attrLong(ext, 'cx')),
+      this.emuToPx(attrLong(ext, 'cy'))
+    );
     const pptxShapeId = this.getPptxShapeId(groupShape) || '';
     const groupDataAttributes = this.buildSvgGroupDataAttributes(pptxShapeId);
-    const hiddenStyleAttr = this.buildSvgStyleAttribute(this.buildHiddenSvgStyle(pptxShapeId));
+    const hiddenStyle = this.buildHiddenSvgStyle(pptxShapeId);
+    const animationStyle = this.buildAnimatedSvgStyle(pptxShapeId);
 
-    sb.appendLine(`<g ${groupDataAttributes} transform="translate(${f0(left)},${f0(top)})"${hiddenStyleAttr}>`);
+    // Like shapes and pictures, an animated group gets an outer wrapper for the animation
+    // (and any motion-path offset) so it never fights the inner translate.
+    const needsAnimationWrapper = animationStyle !== '';
+    if (needsAnimationWrapper) {
+      sb.appendLine(`<g ${groupDataAttributes}${this.buildSvgStyleAttribute(this.combineSvgStyles(hiddenStyle, animationStyle))}>`);
+      sb.appendLine(`<g transform="translate(${f0(left)},${f0(top)})">`);
+    } else {
+      sb.appendLine(`<g ${groupDataAttributes} transform="translate(${f0(left)},${f0(top)})"${this.buildSvgStyleAttribute(hiddenStyle)}>`);
+    }
 
-    for (const child of childElements(groupShape)) {
-      if (child.localName === 'sp') this.renderShape(sb, defsSb, child, slidePart);
-      else if (child.localName === 'pic') this.renderPicture(sb, defsSb, child, slidePart);
-      else if (child.localName === 'graphicFrame') this.renderGraphicFrame(sb, defsSb, child, slidePart);
-      else if (child.localName === 'cxnSp') this.renderConnectionShape(sb, defsSb, child, slidePart);
+    // Children are positioned in the group's child coordinate space: a:chOff lands on the
+    // group's top-left corner and a:chExt is stretched to the group's (mapped) size.
+    const chOff = firstChild(xfrm, 'chOff');
+    const chExt = firstChild(xfrm, 'chExt');
+    const childSpaceWidth = this.emuToPx(attrLong(chExt, 'cx'));
+    const childSpaceHeight = this.emuToPx(attrLong(chExt, 'cy'));
+    this._groupFrames.push({
+      originX: this.emuToPx(attrLong(chOff, 'x')),
+      originY: this.emuToPx(attrLong(chOff, 'y')),
+      scaleX: width > 0 && childSpaceWidth > 0 ? width / childSpaceWidth : 1.0,
+      scaleY: height > 0 && childSpaceHeight > 0 ? height / childSpaceHeight : 1.0,
+    });
+    try {
+      for (const child of childElements(groupShape)) {
+        if (child.localName === 'sp') this.renderShape(sb, defsSb, child, slidePart);
+        else if (child.localName === 'pic') this.renderPicture(sb, defsSb, child, slidePart);
+        else if (child.localName === 'graphicFrame') this.renderGraphicFrame(sb, defsSb, child, slidePart);
+        else if (child.localName === 'cxnSp') this.renderConnectionShape(sb, defsSb, child, slidePart);
+        else if (child.localName === 'grpSp') this.renderGroupShape(sb, defsSb, child, slidePart);
+      }
+    } finally {
+      this._groupFrames.pop();
     }
 
     sb.appendLine('</g>');
+    if (needsAnimationWrapper) sb.appendLine('</g>');
   },
 
   renderTable(sb, table) {
@@ -1619,6 +1666,25 @@ module.exports = {
     const height = this.emuToPx(attrLong(ext, 'cy'));
 
     return [left, top, width, height];
+  },
+
+  /**
+   * Map a rectangle read from a shape's own xfrm (px) into the coordinate space of the
+   * enclosing group's <g>, whose translate already places the group itself. Group children
+   * are stored in the group's child space (chOff/chExt); positions and sizes are scaled to
+   * the group's frame while text and line widths are not, matching PowerPoint. Outside any
+   * group this is the identity, so top-level shapes keep their slide coordinates.
+   */
+  mapGroupChildRect(left, top, width, height) {
+    const frames = this._groupFrames;
+    if (frames == null || frames.length === 0) return [left, top, width, height];
+    const frame = frames[frames.length - 1];
+    return [
+      (left - frame.originX) * frame.scaleX,
+      (top - frame.originY) * frame.scaleY,
+      width * frame.scaleX,
+      height * frame.scaleY,
+    ];
   },
 
   getScene3DTransform(spPr) {

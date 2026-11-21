@@ -748,7 +748,8 @@ module.exports = {
    * <a:br> segment) is drawn as SVG text stretched to the box width (textLength) and sized to
    * an equal share of the box height; the envelope's own curve is not reproduced.
    */
-  renderWarpedTextBody(sb, textBody, inherited, fontScale, width, height, leftInsetPx, topInsetPx, rightInsetPx, bottomInsetPx) {
+  renderWarpedTextBody(sb, textBody, inherited, fontScale, width, height, leftInsetPx, topInsetPx, rightInsetPx, bottomInsetPx, defaultTextColor = null) {
+    const textColor = defaultTextColor ?? this.getThemeTextColor();
     const localLstStyle = firstChild(textBody, 'lstStyle');
     const lines = [];
     for (const para of elements(textBody, 'p', A)) {
@@ -789,7 +790,7 @@ module.exports = {
 
       const baseline = topInsetPx + bandHeight * i + bandHeight * WarpBaselineRatio;
       sb.append(
-        `<text x="${f1(leftInsetPx)}" y="${f1(baseline)}" textLength="${f1(innerWidth)}" lengthAdjust="spacingAndGlyphs" style="font-size:${f1(fontPx)}px;fill:${this.getThemeTextColor()}">`
+        `<text x="${f1(leftInsetPx)}" y="${f1(baseline)}" textLength="${f1(innerWidth)}" lengthAdjust="spacingAndGlyphs" style="font-size:${f1(fontPx)}px;fill:${textColor}">`
       );
       for (const part of lines[i]) sb.append(`<tspan style="${this._toSvgTextStyle(part.style)}">${this.encode(part.text)}</tspan>`);
       sb.appendLine('</text>');

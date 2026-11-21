@@ -4,7 +4,7 @@
 
 const { firstChild, elements, descendants, attr, attrLong, childElements, innerText, NS } = require('../ooxml/dom');
 const { REL_TYPE } = require('../ooxml/package');
-const { f0, f1, f2, f3, f4 } = require('../util/format');
+const { f0, f1, f2, f3, f4, bankRound } = require('../util/format');
 const { placeholderOf, textBodyOf, shapePropsOf, shapeTreeOf } = require('./elements');
 
 const A = NS.A;
@@ -17,6 +17,14 @@ const numOr = (el, name, def = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : def;
 };
+
+// PowerPoint's shadow blur radius spans about three standard deviations of a Gaussian: an
+// inner shadow with blurRad 6 pt (8 px) fits sigma 2.60 px at full strength over 50 rendered
+// choa slides (edge alpha 0.42, gone by 7 px).
+const InnerShadowBlurRadiusPerSigma = 3.0;
+
+// Values within half a display unit of zero print as 0, so C# never writes "-0.0" where JS writes "0.0".
+const snapNearZero = (value) => (Math.abs(value) < 0.05 ? 0 : value);
 
 const ciIncludes = (hay, needle) => (hay || '').toLowerCase().includes(needle.toLowerCase());
 const ciEq = (a, b) => (a || '').toLowerCase() === (b || '').toLowerCase();
@@ -220,7 +228,7 @@ module.exports = {
 
   // ── SVG Stroke ────────────────────────────────────────────────────
 
-  getSvgStroke(spPr, width, height) {
+  getSvgStroke(spPr, width, height, compoundOutset = 0) {
     const outline = firstChild(spPr, 'ln');
     if (outline == null) return ['stroke="none"', ''];
     if (firstChild(outline, 'noFill') != null) return ['stroke="none"', ''];
@@ -240,7 +248,7 @@ module.exports = {
     const isCompound = ciEq(cmpd, 'dbl') || ciEq(cmpd, 'thickThin') || ciEq(cmpd, 'thinThick') || ciEq(cmpd, 'tri');
 
     if (isCompound) {
-      const overlay = this.buildCompoundBorderRects(cmpd, color, strokePx, width, height);
+      const overlay = this.buildCompoundBorderRects(cmpd, color, strokePx, width, height, compoundOutset);
       return ['stroke="none"', overlay];
     }
 
@@ -257,53 +265,46 @@ module.exports = {
     return [strokeAttr, ''];
   },
 
-  buildCompoundBorderRects(cmpd, color, strokePx, w, h) {
-    const half = strokePx / 2.0;
+  // Lines of a compound outline as [start, end] fractions of the line width, measured from its
+  // outer edge. thickThin was measured on PowerPoint renders of the "Compound Frame" picture style
+  // (a 24 px line: 14.4 px, 4.8 px gap, 4.8 px); thinThick is its mirror. The gaps are transparent.
+  getCompoundLineBands(cmpd) {
+    if (ciEq(cmpd, 'thickThin')) return [[0.0, 0.6], [0.8, 1.0]];
+    if (ciEq(cmpd, 'thinThick')) return [[0.0, 0.2], [0.4, 1.0]];
+    if (ciEq(cmpd, 'dbl')) return [[0.0, 1.0 / 3.0], [2.0 / 3.0, 1.0]];
+    if (ciEq(cmpd, 'tri')) return [[0.0, 0.2], [0.4, 0.6], [0.8, 1.0]];
+    return [];
+  },
+
+  // Draws a compound outline as one stroked rect per line. The line is centred on the box edge,
+  // moved out by `outset` (pictures draw their outline outside the frame).
+  buildCompoundBorderRects(cmpd, color, strokePx, w, h, outset = 0) {
+    const outerEdge = -strokePx / 2.0 - outset;
     let svg = '';
-
-    if (ciEq(cmpd, 'thickThin')) {
-      const thick = strokePx * 0.5;
-      const gap = strokePx * 0.25;
-      const thin = strokePx * 0.25;
-      const outerC = -half + thick / 2.0;
-      const gapC = -half + thick + gap / 2.0;
-      const innerC = -half + thick + gap + thin / 2.0;
-      svg += `<rect x="${f1(gapC)}" y="${f1(gapC)}" width="${f1(w - 2 * gapC)}" height="${f1(h - 2 * gapC)}" fill="none" stroke="#FFFFFF" stroke-width="${f1(gap)}"/>`;
-      svg += `<rect x="${f1(outerC)}" y="${f1(outerC)}" width="${f1(w - 2 * outerC)}" height="${f1(h - 2 * outerC)}" fill="none" stroke="${color}" stroke-width="${f1(thick)}"/>`;
-      svg += `<rect x="${f1(innerC)}" y="${f1(innerC)}" width="${f1(w - 2 * innerC)}" height="${f1(h - 2 * innerC)}" fill="none" stroke="${color}" stroke-width="${f1(thin)}"/>`;
-    } else if (ciEq(cmpd, 'thinThick')) {
-      const thin = strokePx * 0.25;
-      const gap = strokePx * 0.25;
-      const thick = strokePx * 0.5;
-      const outerC = -half + thin / 2.0;
-      const gapC = -half + thin + gap / 2.0;
-      const innerC = -half + thin + gap + thick / 2.0;
-      svg += `<rect x="${f1(gapC)}" y="${f1(gapC)}" width="${f1(w - 2 * gapC)}" height="${f1(h - 2 * gapC)}" fill="none" stroke="#FFFFFF" stroke-width="${f1(gap)}"/>`;
-      svg += `<rect x="${f1(outerC)}" y="${f1(outerC)}" width="${f1(w - 2 * outerC)}" height="${f1(h - 2 * outerC)}" fill="none" stroke="${color}" stroke-width="${f1(thin)}"/>`;
-      svg += `<rect x="${f1(innerC)}" y="${f1(innerC)}" width="${f1(w - 2 * innerC)}" height="${f1(h - 2 * innerC)}" fill="none" stroke="${color}" stroke-width="${f1(thick)}"/>`;
-    } else if (ciEq(cmpd, 'dbl')) {
-      const line = strokePx / 3.0;
-      const outerC = -half + line / 2.0;
-      const gapC = 0.0;
-      const innerC = half - line / 2.0;
-      svg += `<rect x="${f1(gapC)}" y="${f1(gapC)}" width="${f1(w - 2 * gapC)}" height="${f1(h - 2 * gapC)}" fill="none" stroke="#FFFFFF" stroke-width="${f1(line)}"/>`;
-      svg += `<rect x="${f1(outerC)}" y="${f1(outerC)}" width="${f1(w - 2 * outerC)}" height="${f1(h - 2 * outerC)}" fill="none" stroke="${color}" stroke-width="${f1(line)}"/>`;
-      svg += `<rect x="${f1(innerC)}" y="${f1(innerC)}" width="${f1(w - 2 * innerC)}" height="${f1(h - 2 * innerC)}" fill="none" stroke="${color}" stroke-width="${f1(line)}"/>`;
-    } else if (ciEq(cmpd, 'tri')) {
-      const line = strokePx / 5.0;
-      const outerC = -half + line / 2.0;
-      const gap1C = -half + line + line / 2.0;
-      const midC = 0.0;
-      const gap2C = half - line - line / 2.0;
-      const innerC = half - line / 2.0;
-      svg += `<rect x="${f1(gap1C)}" y="${f1(gap1C)}" width="${f1(w - 2 * gap1C)}" height="${f1(h - 2 * gap1C)}" fill="none" stroke="#FFFFFF" stroke-width="${f1(line)}"/>`;
-      svg += `<rect x="${f1(gap2C)}" y="${f1(gap2C)}" width="${f1(w - 2 * gap2C)}" height="${f1(h - 2 * gap2C)}" fill="none" stroke="#FFFFFF" stroke-width="${f1(line)}"/>`;
-      svg += `<rect x="${f1(outerC)}" y="${f1(outerC)}" width="${f1(w - 2 * outerC)}" height="${f1(h - 2 * outerC)}" fill="none" stroke="${color}" stroke-width="${f1(line)}"/>`;
-      svg += `<rect x="${f1(midC)}" y="${f1(midC)}" width="${f1(w - 2 * midC)}" height="${f1(h - 2 * midC)}" fill="none" stroke="${color}" stroke-width="${f1(line)}"/>`;
-      svg += `<rect x="${f1(innerC)}" y="${f1(innerC)}" width="${f1(w - 2 * innerC)}" height="${f1(h - 2 * innerC)}" fill="none" stroke="${color}" stroke-width="${f1(line)}"/>`;
+    for (const [start, end] of this.getCompoundLineBands(cmpd)) {
+      const c = outerEdge + ((start + end) / 2.0) * strokePx;
+      const lineWidth = (end - start) * strokePx;
+      svg += `<rect x="${f1(c)}" y="${f1(c)}" width="${f1(w - 2 * c)}" height="${f1(h - 2 * c)}" fill="none" stroke="${color}" stroke-width="${f1(lineWidth)}"/>`;
     }
-
     return svg;
+  },
+
+  // Width in px of a shape's outline (1 pt when ln has no w), or 0 when it draws no line.
+  getOutlineWidthPx(spPr) {
+    const outline = firstChild(spPr, 'ln');
+    if (outline == null || firstChild(outline, 'noFill') != null || firstChild(outline, 'solidFill') == null) return 0;
+    const widthEmu = attr(outline, 'w') != null ? numOr(outline, 'w') : 12700; // default 1pt, as in getSvgStroke
+    return this.emuToPx(widthEmu);
+  },
+
+  // True when the shape has a 3D body (bevel, extrusion or contour). PowerPoint draws such
+  // shapes with its 3D renderer, which keeps a picture's outline centred on the edge.
+  hasShape3DBody(spPr) {
+    const sp3d = firstChild(spPr, 'sp3d');
+    if (sp3d == null) return false;
+    return (
+      firstChild(sp3d, 'bevelT') != null || firstChild(sp3d, 'bevelB') != null || numOr(sp3d, 'extrusionH') > 0 || numOr(sp3d, 'contourW') > 0
+    );
   },
 
   // ── SVG Transform ────────────────────────────────────────────────
@@ -371,6 +372,36 @@ module.exports = {
 
     if (filters.length === 0) return '';
     return `filter:${filters.join(' ')};`;
+  },
+
+  // Adds an SVG filter for effectLst/innerShdw and returns its id ('' when there is none). The
+  // filter darkens the inside of whatever it is applied to: the shadow colour fills everything
+  // outside the source's alpha, is blurred and offset, then clipped back to the source.
+  appendInnerShadowFilter(defsSb, spPr, width, height) {
+    const inner = firstChild(firstChild(spPr, 'effectLst'), 'innerShdw');
+    if (inner == null) return '';
+
+    const blur = this.emuToPx(numOr(inner, 'blurRad', 0));
+    const dist = this.emuToPx(numOr(inner, 'dist', 0));
+    const angle = ((numOr(inner, 'dir', 0) / 60000.0) * Math.PI) / 180.0;
+    const dx = snapNearZero(dist * Math.cos(angle));
+    const dy = snapNearZero(dist * Math.sin(angle));
+    const sigma = blur / InnerShadowBlurRadiusPerSigma;
+    const color = this.getColorFromEffectColorContainer(inner, '00000080');
+    const margin = Math.ceil(3 * sigma + dist) + 1;
+
+    const id = `innerShdw${++this._defsCounter}`;
+    defsSb.appendLine(
+      `<filter id="${id}" filterUnits="userSpaceOnUse" x="${f0(-margin)}" y="${f0(-margin)}" width="${f1(width + 2 * margin)}" height="${f1(height + 2 * margin)}" color-interpolation-filters="sRGB">` +
+        `<feFlood flood-color="${color}" result="shadowColor"/>` +
+        '<feComposite in="shadowColor" in2="SourceAlpha" operator="out" result="outside"/>' +
+        `<feGaussianBlur in="outside" stdDeviation="${f2(sigma)}" result="blurred"/>` +
+        `<feOffset in="blurred" dx="${f1(dx)}" dy="${f1(dy)}" result="offset"/>` +
+        '<feComposite in="offset" in2="SourceAlpha" operator="in" result="shadow"/>' +
+        '<feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="shadow"/></feMerge>' +
+        '</filter>'
+    );
+    return id;
   },
 
   // ── Shape Rendering ──────────────────────────────────────────────
@@ -489,7 +520,8 @@ module.exports = {
     const directStyle = this.buildSvgStyleAttribute(this.combineSvgStyles(hiddenStyle, innerStyle));
     const innerStyleAttr = this.buildSvgStyleAttribute(innerStyle);
 
-    const defaultTextColor = `color:${this.getThemeTextColor()};`;
+    const shapeTextColor = this.getShapeDefaultTextColor(shapeStyle);
+    const defaultTextColor = `color:${shapeTextColor};`;
 
     const needsStaticWrapper = innerStyle !== '';
     const needsAnimationWrapper = animationStyle !== '';
@@ -504,7 +536,23 @@ module.exports = {
       sb.appendLine(`<g ${groupDataAttributes} transform="translate(${f0(left)},${f0(top)})${svgXform}"${directStyle}>`);
     }
 
-    if (presetGeom != null) {
+    // Render shape geometry. An inner shadow darkens the fill only, so the outline is drawn
+    // separately on top of it.
+    const innerShadowId = this.appendInnerShadowFilter(defsSb, spPr, width, height);
+    if (innerShadowId !== '') {
+      sb.appendLine(`<g filter="url(#${innerShadowId})">`);
+      if (presetGeom != null) this.appendPresetGeometryElement(sb, presetGeom, width, height, fillAttr, 'stroke="none"');
+      else if (customFillElement !== '') sb.appendLine(customFillElement);
+      else sb.appendLine(`<rect width="${f1(width)}" height="${f1(height)}" ${fillAttr} stroke="none"/>`);
+      sb.appendLine('</g>');
+      if (presetGeom != null) {
+        if (strokeAttr !== 'stroke="none"') this.appendPresetGeometryElement(sb, presetGeom, width, height, 'fill="none"', strokeAttr);
+      } else if (customFillElement !== '') {
+        if (customStrokeElement !== '') sb.appendLine(customStrokeElement);
+      } else if (strokeAttr !== 'stroke="none"') {
+        sb.appendLine(`<rect width="${f1(width)}" height="${f1(height)}" fill="none" ${strokeAttr}/>`);
+      }
+    } else if (presetGeom != null) {
       if (presetGeom.type === 'polygon') sb.appendLine(`<polygon points="${presetGeom.data}" ${fillAttr} ${strokeAttr}/>`);
       else if (presetGeom.type === 'roundrect')
         sb.appendLine(`<rect width="${f1(width)}" height="${f1(height)}" rx="${f1(presetGeom.rx)}" ry="${f1(presetGeom.ry)}" ${fillAttr} ${strokeAttr}/>`);
@@ -522,7 +570,7 @@ module.exports = {
 
     if (txBody != null && this.getTextWarpPreset(bodyPr) !== '') {
       // WordArt-warped text is drawn as stretched SVG text instead of HTML
-      this.renderWarpedTextBody(sb, txBody, inherited, fontScale, width, height, lInsPx, tInsPx, rInsPx, bInsPx);
+      this.renderWarpedTextBody(sb, txBody, inherited, fontScale, width, height, lInsPx, tInsPx, rInsPx, bInsPx, shapeTextColor);
     } else if (txBody != null) {
       const clipAttr = customClipId !== '' ? ` clip-path="url(#${customClipId})"` : '';
       const wrapStyle = isNoWrapText
@@ -588,8 +636,6 @@ module.exports = {
     const [fillAttr, fillDefs] = this.getSvgFill(spPr, slidePart, width, height);
     if (fillDefs !== '') defsSb.appendLine(fillDefs);
 
-    const [strokeAttr, strokeOverlay] = this.getSvgStroke(spPr, width, height);
-
     const presetGeom = this.getPresetGeometryData(spPr, width, height);
     let customFillElement = '';
     let customStrokeElement = '';
@@ -608,6 +654,21 @@ module.exports = {
     } else if (customClipId !== '') {
       clipAttr = ` clip-path="url(#${customClipId})"`;
     }
+
+    // PowerPoint draws a flat rectangular picture's outline outside the picture (measured on
+    // "Simple/Compound Frame" pictures), so the line is centred half its width out. Pictures
+    // with a 3D body (bevelled styles) keep it centred on the edge.
+    // It also snaps such a picture's edges to whole pixels and draws the picture and its frame on
+    // that box: the left/top edge is snapped by the group's translate, the right/bottom edge here.
+    const isRectFrame = presetGeom == null && customFillElement === '' && customClipId === '' && !this.hasShape3DBody(spPr);
+    let outlineOutset = isRectFrame ? this.getOutlineWidthPx(spPr) / 2.0 : 0;
+    if (outlineOutset < 0.05) outlineOutset = 0;
+    if (outlineOutset > 0) {
+      width = bankRound(left + width) - bankRound(left);
+      height = bankRound(top + height) - bankRound(top);
+    }
+    const [strokeAttr, strokeOverlay] = this.getSvgStroke(spPr, width, height, outlineOutset);
+    const innerShadowId = this.appendInnerShadowFilter(defsSb, spPr, width, height);
 
     const [svgXform, css3dStyle] = this.getSvgTransform(firstChild(spPr, 'xfrm'), width, height, spPr);
     const effectsStyle = this.getSvgEffectsStyle(spPr);
@@ -634,6 +695,9 @@ module.exports = {
     } else {
       sb.appendLine(`<g ${groupDataAttributes} transform="translate(${f0(left)},${f0(top)})${svgXform}"${directStyle}>`);
     }
+
+    // The inner shadow darkens the picture (and its fill), not the outline drawn after it.
+    if (innerShadowId !== '') sb.appendLine(`<g filter="url(#${innerShadowId})">`);
 
     if (fillAttr !== 'fill="none"') {
       if (presetGeom != null) this.appendPresetGeometryElement(sb, presetGeom, width, height, fillAttr, 'stroke="none"');
@@ -664,9 +728,15 @@ module.exports = {
       }
     }
 
+    if (innerShadowId !== '') sb.appendLine('</g>');
+
     if (strokeAttr !== 'stroke="none"') {
       if (presetGeom != null) this.appendPresetGeometryElement(sb, presetGeom, width, height, 'fill="none"', strokeAttr);
       else if (customStrokeElement !== '') sb.appendLine(customStrokeElement);
+      else if (outlineOutset > 0)
+        sb.appendLine(
+          `<rect x="${f1(-outlineOutset)}" y="${f1(-outlineOutset)}" width="${f1(width + 2 * outlineOutset)}" height="${f1(height + 2 * outlineOutset)}" fill="none" ${strokeAttr}/>`
+        );
       else sb.appendLine(`<rect width="${f1(width)}" height="${f1(height)}" fill="none" ${strokeAttr}/>`);
     }
 
@@ -1777,6 +1847,20 @@ module.exports = {
     const strokePx = this.emuToPx(widthEmu);
 
     return `stroke="#${hex}" stroke-width="${f2(strokePx)}"`;
+  },
+
+  /**
+   * Colour for text that sets none of its own. PowerPoint takes it from the shape style's
+   * fontRef (white text on a default accent-filled shape, for example); run and list-style
+   * colours still override it. Without a fontRef colour it is the theme text colour.
+   */
+  getShapeDefaultTextColor(shapeStyle) {
+    const fontRef = firstChild(shapeStyle, 'fontRef');
+    if (fontRef != null) {
+      const hex = this.resolveStyleRefColor(fontRef);
+      if (hex !== '') return '#' + hex;
+    }
+    return this.getThemeTextColor();
   },
 
   resolveStyleRefColor(styleRef) {

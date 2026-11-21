@@ -36,10 +36,11 @@ function distinctOic(list) {
 }
 
 module.exports = {
-  run(presentationPart, slideRelIds, outputDir, inputPath, toolName, toolVersion, exportedAt, eot2ttfPath = null, noBackground = false) {
+  run(presentationPart, slideRelIds, outputDir, inputPath, toolName, toolVersion, exportedAt, eot2ttfPath = null, noBackground = false, defaultFontFamily = null) {
     this._outputDir = outputDir;
     this._eot2ttfToolPath = eot2ttfPath;
     this._noBackground = noBackground;
+    this._defaultFontFamilies = this.parseDefaultFontFamilies(defaultFontFamily);
     this._imageCounter = 0;
     this._mediaCounter = 0;
     this._savedImagePaths.clear();
@@ -73,11 +74,13 @@ module.exports = {
       process.stdout.write(`[${i + 1}/${slideRelIds.length}] Converting slide ${i + 1}... `);
       const previousSlidePart = i > 0 ? presentationPart.getPartById(slideRelIds[i - 1]) : null;
       const slidePart = presentationPart.getPartById(slideRelIds[i]);
+      // Load theme colors for this slide's master (animation colour changes resolve scheme
+      // colours such as bg1 with them)
+      this.loadThemeColors(slidePart);
+
       const animationInfo = this.extractSlideAnimationInfo(slidePart, slideWidthPx, slideHeightPx);
       const transitionInfo = this.extractSlideTransitionInfo(slidePart);
       const transitionRenderInfo = this.extractSlideTransitionShapeRenderInfo(previousSlidePart, slidePart, transitionInfo);
-
-      this.loadThemeColors(slidePart);
 
       this._currentSlideImages.length = 0;
       this._currentSlideVideos.length = 0;
@@ -112,7 +115,11 @@ module.exports = {
           slideWidthPx,
           slideHeightPx,
           stage.hiddenShapeIdsAfterStage,
-          stage.animatedShapeStylesByShapeId
+          stage.animatedShapeStylesByShapeId,
+          null,
+          null,
+          null,
+          stage.keyframeRules
         );
         const subSlideHtmlFileName = `${slideBaseName}_${stage.stageNumber}.html`;
         fs.writeFileSync(path.join(outputDir, subSlideHtmlFileName), '﻿' + subSlideHtml, 'utf8');
@@ -163,6 +170,7 @@ module.exports = {
     const infoJson = serializeIndented(info);
     fs.writeFileSync(infoPath, '﻿' + infoJson + '\n', 'utf8');
     console.log(`Metadata written -> ${path.basename(infoPath)}`);
+    this.writeIndexPage(outputDir, infoJson);
 
     console.log(`Done. ${slideRelIds.length} slide(s) converted to ${outputDir}`);
   },
@@ -269,7 +277,8 @@ module.exports = {
     animatedShapeStylesByShapeId = null,
     morphPictureOverlaysByShapeId = null,
     previousSlidePart = null,
-    slideTransitionInfo = null
+    slideTransitionInfo = null,
+    stageKeyframeRules = null
   ) {
     const slideTransitionStyle = this.buildSlideTransitionStyle(slideTransitionInfo);
     const renderRandomBars = slideTransitionInfo != null && (slideTransitionInfo.type || '').toLowerCase() === 'random';
@@ -320,6 +329,8 @@ module.exports = {
       this.appendStageAnimationCss(sb);
     this.appendMotionPathCss(sb, animatedShapeStylesByShapeId);
     this.appendFlyInCss(sb, animatedShapeStylesByShapeId);
+    // Keyframes generated for this click stage (track timelines, wipes).
+    for (const keyframeRule of stageKeyframeRules || []) sb.appendLine(keyframeRule);
     if (renderCurtains) this.appendCurtainsTransitionCss(sb, slideWidthPx, slideHeightPx);
     sb.appendLine('</style>');
 

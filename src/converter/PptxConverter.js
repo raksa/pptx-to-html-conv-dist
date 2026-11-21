@@ -44,6 +44,9 @@ class PptxConverter {
     // background fill (nor the white fallback) and no previous-slide layer under transitions,
     // so whatever page the HTML is embedded in shows through.
     this._noBackground = false;
+    // The host page's default font families, put in front of the generic family that closes
+    // every font list (see FontHelper.buildCssFontFamily). Empty unless a run is given one.
+    this._defaultFontFamilies = [];
     // eot2ttf tool path (or null)
     this._eot2ttfToolPath = null;
     // Unique filename counters
@@ -97,6 +100,7 @@ Object.assign(
   require('./slideTransitionHelper'),
   require('./textRenderer'),
   require('./shapeRenderer'),
+  require('./indexPageHelper'),
   require('./run')
 );
 

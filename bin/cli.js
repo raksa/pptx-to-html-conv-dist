@@ -22,7 +22,7 @@ function main(argv) {
 
   const inputPath = parsed.get('--file');
   if (inputPath == null || inputPath === '') {
-    console.error('Usage: pptx-to-html-conv --file <input.pptx> [--out <output-folder>] [--eot2ttf <path>] [--no-background]');
+    console.error('Usage: pptx-to-html-conv --file <input.pptx> [--out <output-folder>] [--eot2ttf <path>] [--no-background] [--default-font-family <family>]');
     return 1;
   }
 
@@ -37,8 +37,10 @@ function main(argv) {
   // Bare switch (no value), so it is not picked up by parseArgs.
   const noBackground = argv.some((a) => a.toLowerCase() === '--no-background');
 
+  const defaultFontFamily = parsed.has('--default-font-family') ? parsed.get('--default-font-family') : null;
+
   try {
-    exportPptx(inputPath, outputDir, eot2ttfPath, noBackground);
+    exportPptx(inputPath, outputDir, eot2ttfPath, noBackground, defaultFontFamily);
   } catch (ex) {
     console.error(ex.message);
     return 1;

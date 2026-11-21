@@ -5,8 +5,9 @@
  * Convert a .pptx deck to HTML assets.
  *
  * Writes `slide1.html`, `slide2.html`, … plus per-animation-stage files,
- * `info.json`, `fonts/`, `images/` and `media/` into `outputDirectory`, which
- * is created if missing.
+ * `info.json`, an `index.html` viewer (slide show, presenter view, grid and
+ * info), `fonts/`, `images/` and `media/` into `outputDirectory`, which is
+ * created if missing.
  *
  * @param pptxPath Path to the input .pptx file.
  * @param outputDirectory Folder to write HTML and assets into.
@@ -14,13 +15,17 @@
  * @param noBackground When true, omit slide backgrounds so slides render
  *   transparent over the host page (transitions then play over that page
  *   instead of over the previous slide).
+ * @param defaultFontFamily The host page's default font family (or
+ *   comma-separated families). It goes in front of the generic family that
+ *   closes every font list, so text in a face the computer lacks is drawn in it.
  * @throws If a required argument is blank, or an input path does not exist.
  */
 export declare function exportPptx(
   pptxPath: string,
   outputDirectory: string,
   eot2ttfPath?: string | null,
-  noBackground?: boolean
+  noBackground?: boolean,
+  defaultFontFamily?: string | null
 ): void;
 
 /**
@@ -48,6 +53,7 @@ export declare class PptxConverter {
     toolVersion: string,
     exportedAt: string,
     eot2ttfPath?: string | null,
-    noBackground?: boolean
+    noBackground?: boolean,
+    defaultFontFamily?: string | null
   ): void;
 }

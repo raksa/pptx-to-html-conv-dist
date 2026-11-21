@@ -29,8 +29,11 @@ function formatExportedAt(date) {
  * @param {string} outputDirectory Folder to write HTML and assets (created if missing).
  * @param {string|null} eot2ttfPath Path to the eot2ttf tool, or null to skip that step.
  * @param {boolean} noBackground When true, omit slide backgrounds so slides render transparent over the host page.
+ * @param {string|null} defaultFontFamily The host page's default font family (or comma-separated families), put in
+ *   front of the generic family that closes every font list, so a face the computer lacks falls to it; null to leave
+ *   the lists as they are.
  */
-function exportPptx(pptxPath, outputDirectory, eot2ttfPath = null, noBackground = false) {
+function exportPptx(pptxPath, outputDirectory, eot2ttfPath = null, noBackground = false, defaultFontFamily = null) {
   if (pptxPath == null || String(pptxPath).trim() === '') throw new Error('pptxPath is required.');
   if (outputDirectory == null || String(outputDirectory).trim() === '') throw new Error('outputDirectory is required.');
 
@@ -51,12 +54,13 @@ function exportPptx(pptxPath, outputDirectory, eot2ttfPath = null, noBackground 
   console.log(`Output:  ${outputDirectory}`);
   if (eot2ttfPath != null) console.log(`eot2ttf: ${eot2ttfPath}`);
   if (noBackground) console.log('Background: omitted (transparent)');
+  if (defaultFontFamily != null && String(defaultFontFamily).trim() !== '') console.log(`Default font: ${defaultFontFamily}`);
   console.log(`Slides:  ${slideRelIds.length}`);
   console.log('Extracting embedded fonts...');
 
   const exportedAt = formatExportedAt(new Date());
   const converter = new PptxConverter();
-  converter.run(presentationPart, slideRelIds, outputDirectory, pptxPath, ToolName, ToolVersion, exportedAt, eot2ttfPath, noBackground);
+  converter.run(presentationPart, slideRelIds, outputDirectory, pptxPath, ToolName, ToolVersion, exportedAt, eot2ttfPath, noBackground, defaultFontFamily);
 }
 
 /**

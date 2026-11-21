@@ -201,6 +201,23 @@ module.exports = {
     return css;
   },
 
+  // Split a default font family value ("Host Sans" or "'Host Sans', Other") into family names:
+  // comma-separated, trimmed, surrounding quotes removed, blanks skipped.
+  parseDefaultFontFamilies(defaultFontFamily) {
+    const familyNames = [];
+    for (const part of (defaultFontFamily || '').split(',')) {
+      let familyName = part.trim();
+      if (
+        familyName.length >= 2 &&
+        (familyName[0] === "'" || familyName[0] === '"') &&
+        familyName[familyName.length - 1] === familyName[0]
+      )
+        familyName = familyName.substring(1, familyName.length - 1).trim();
+      if (familyName !== '') familyNames.push(familyName);
+    }
+    return familyNames;
+  },
+
   buildCssFontFamily(...familyNames) {
     const orderedFamilies = [];
     const seenFamilies = new Set(); // lowercased keys
@@ -223,6 +240,10 @@ module.exports = {
     }
 
     if (orderedFamilies.length === 0) return '';
+
+    // A face the computer lacks falls to the host page's default font before the browser's
+    // generic one.
+    for (const defaultFamilyName of this._defaultFontFamilies) addFamily(defaultFamilyName);
 
     const genericFamily = this.getGenericCssFontFamily(orderedFamilies[0]);
     if (genericFamily !== '' && !seenFamilies.has(genericFamily.toLowerCase())) {

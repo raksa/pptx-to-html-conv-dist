@@ -397,8 +397,11 @@ module.exports = {
         const offset = fmtTrim(row[0], 3);
         const b = (row[3] * W) / H;
         const c = (row[5] * H) / W;
-        curtain += ` ${offset}% { transform:matrix(${fmt(row[2], 5)}, ${fmt(c, 5)}, ${fmt(b, 5)}, ${fmt(row[6], 5)}, ${fmt(row[4] * W, 2)}, ${fmt(row[7] * H, 2)}); }`;
-        shade += ` ${offset}% { opacity:${fmt(row[8], 3)}; }`;
+        // Off the slide from 85% on; at the end the curtain leaves the page, so its copies of the
+        // previous slide (one per strip) hold no layers, paint or accessibility text at rest.
+        const end = row[0] === 100 ? ' display:none;' : '';
+        curtain += ` ${offset}% { transform:matrix(${this._curtainNumber(row[2], 5)}, ${this._curtainNumber(c, 5)}, ${this._curtainNumber(b, 5)}, ${this._curtainNumber(row[6], 5)}, ${this._curtainNumber(row[4] * W, 2)}, ${this._curtainNumber(row[7] * H, 2)});${end} }`;
+        shade += ` ${offset}% { opacity:${this._curtainNumber(row[8], 3)}; }`;
         for (let j = 0; j < n; j++) {
           // Strip j shows the texture between knot offsets g_j and g_j+1 (from the outer edge) on
           // the fabric between w_j and w_j+1: u = r x + k, texture x = g (left) or W - g (right).
@@ -408,10 +411,10 @@ module.exports = {
           const g1 = w1 + row[9 + j] * W;
           const r = (w1 - w0) / (g1 - g0);
           const k = side === 0 ? w0 - r * g0 : W - w0 - (W - g0) * r;
-          cloths[j] += ` ${offset}% { transform:matrix(${fmt(r, 5)}, 0, 0, 1, ${fmt(k, 2)}, 0); }`;
+          cloths[j] += ` ${offset}% { transform:matrix(${this._curtainNumber(r, 5)}, 0, 0, 1, ${this._curtainNumber(k, 2)}, 0); }`;
         }
         folds.forEach((knot, i) => {
-          foldFrames[i] += ` ${offset}% { opacity:${fmt(row[9 + n + knot], 3)}; }`;
+          foldFrames[i] += ` ${offset}% { opacity:${this._curtainNumber(row[9 + n + knot], 3)}; }`;
         });
       }
       sb.appendLine(`@keyframes pptxCurtain${name} {${curtain} }`);
@@ -419,6 +422,15 @@ module.exports = {
       folds.forEach((knot, i) => sb.appendLine(`@keyframes pptxCurtainFold${name}${knot} {${foldFrames[i]} }`));
       sb.appendLine(`@keyframes pptxCurtainShade${name} {${shade} }`);
     }
+  },
+
+  /**
+   * Fixed-point number for the curtain keyframes; a value that rounds to zero prints as 0
+   * (not "-0.0000"), so the output does not depend on the sign of a rounding residue.
+   */
+  _curtainNumber(value, decimals) {
+    const text = fmt(value, decimals);
+    return /^-[0.]+$/.test(text) ? text.slice(1) : text;
   },
 
   /** Fabric position (px from the curtain's outer edge) of fold knot j. */
@@ -446,14 +458,15 @@ module.exports = {
     const n = CURTAINS_STRIPS;
     const duration = fmtTrim(this.toCssDurationSeconds(durationMs, 0.5), 3);
     const layerStyle = 'display:block;overflow:hidden;position:absolute;inset:0;';
-    const percent = (px) => fmt(Math.min(100, Math.max(0, (px / W) * 100)), 3);
+    const percent = (px) => this._curtainNumber(Math.min(100, Math.max(0, (px / W) * 100)), 3);
     const sb = new StringBuilder();
     for (const side of [0, 1]) {
       const name = side === 0 ? 'L' : 'R';
       const sideName = side === 0 ? 'left' : 'right';
       // Screen-side span [u0, u1] (in the curtain layer) of the fabric span [w0, w1].
       const span = (w0, w1) => (side === 0 ? [w0, w1] : [W - w1, W - w0]);
-      sb.appendLine(`<div class="pptx-curtain" style="animation:pptxCurtain${name} ${duration}s linear both;">`);
+      // The strips are copies of the previous slide: decoration, not content.
+      sb.appendLine(`<div class="pptx-curtain" aria-hidden="true" style="animation:pptxCurtain${name} ${duration}s linear both;">`);
       for (let j = 0; j < n; j++) {
         // Neighbouring strips overlap by half a pixel so their clip edges leave no seam.
         const [u0, u1] = span(this._curtainKnotFabric(j, W) - (j > 0 ? 0.5 : 0), this._curtainKnotFabric(j + 1, W) + (j < n - 1 ? 0.5 : 0));

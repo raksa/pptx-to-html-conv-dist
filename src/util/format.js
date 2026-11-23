@@ -24,24 +24,25 @@ function isExactHalf(v, digits) {
  * .NET Core rounds half-to-even on the exact double value; JS `toFixed`
  * rounds half-away-from-zero. They agree except on true ties, which we
  * detect against the exact decimal expansion and round to even.
+ *
+ * The sign follows the value, not the rounded digits: since .NET Core 3.0 a
+ * negative value that rounds to zero keeps its minus, and so does -0 itself
+ * (`(-0.3).ToString("F0")` is "-0", `(-0.0).ToString("F1")` is "-0.0").
+ * JS `toFixed` never signs -0, so the sign is put back here by hand.
  */
 function fmt(value, digits) {
   if (value == null || !Number.isFinite(value)) return String(value);
-  let s = value.toFixed(digits);
-
   const v = Math.abs(value);
+  let s = v.toFixed(digits);
+
   if (isExactHalf(v, digits)) {
     const down = truncateMagnitude(v, digits);
     const lastDigit = down.charCodeAt(down.length - 1) - 48;
-    if (lastDigit % 2 === 0) {
-      // Even -> round to even means round down; toFixed rounded away (up).
-      s = value < 0 && !/^0(\.0+)?$/.test(down) ? '-' + down : down;
-    }
+    // Even -> round to even means round down; toFixed rounded away (up).
+    if (lastDigit % 2 === 0) s = down;
   }
 
-  // .NET prints "0" / "0.0" (no negative sign) when the value rounds to zero.
-  if (s[0] === '-' && /^-0(\.0+)?$/.test(s)) s = s.slice(1);
-  return s;
+  return value < 0 || Object.is(value, -0) ? '-' + s : s;
 }
 
 /**
@@ -51,10 +52,13 @@ function fmt(value, digits) {
 function bankRound(x) {
   const floor = Math.floor(x);
   const diff = x - floor;
-  if (diff < 0.5) return floor;
-  if (diff > 0.5) return floor + 1;
+  let r;
+  if (diff < 0.5) r = floor;
+  else if (diff > 0.5) r = floor + 1;
   // exact half -> round to even
-  return floor % 2 === 0 ? floor : floor + 1;
+  else r = floor % 2 === 0 ? floor : floor + 1;
+  // Math.Round keeps the sign of zero: Math.Round(-0.3) is -0, which F0 prints "-0".
+  return r === 0 && (x < 0 || Object.is(x, -0)) ? -0 : r;
 }
 
 // Convenience aliases matching the format specifiers used throughout the port.
@@ -64,16 +68,67 @@ const f2 = (v) => fmt(v, 2);
 const f3 = (v) => fmt(v, 3);
 const f4 = (v) => fmt(v, 4);
 
+// Adds one unit in the last place to a string of decimal digits ("0999" -> "1000", "99" -> "100").
+function incrementDigits(digits) {
+  const d = digits.split('');
+  let i = d.length - 1;
+  while (i >= 0 && d[i] === '9') d[i--] = '0';
+  if (i < 0) return '1' + d.join('');
+  d[i] = String.fromCharCode(d[i].charCodeAt(0) + 1);
+  return d.join('');
+}
+
 /**
  * Equivalent of C# `value.ToString("0.###", InvariantCulture)` (up to N
  * fractional digits, trailing zeros trimmed).
+ *
+ * .NET rounds twice for a custom format, unlike "F": it first rounds the exact
+ * double to 15 significant digits (ties to even), then rounds those digits
+ * half away from zero at the last '#'. So (0.0625).ToString("0.###") is
+ * "0.063" where "F3" gives "0.062", and 8.5185 (really 8.51849999999999951…)
+ * is "8.519" where "F3" gives "8.518". A negative value keeps its minus even
+ * when it rounds to zero ("-0"), as in .NET Core.
  */
 function fmtTrim(value, maxDigits) {
   if (value == null || !Number.isFinite(value)) return String(value);
-  let s = fmt(value, maxDigits);
-  if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
-  if (s[0] === '-' && /^-0$/.test(s)) s = s.slice(1);
-  return s;
+  // toFixed(100) is the exact expansion for |value| >= 2^-48; anything smaller prints 0 here.
+  const exact = Math.abs(value).toFixed(100);
+  const dot = exact.indexOf('.');
+  let digits = exact.slice(0, dot) + exact.slice(dot + 1);
+  let point = dot; // how many of `digits` come before the decimal point
+
+  // Round the exact value to 15 significant digits, ties to even.
+  const first = digits.search(/[1-9]/);
+  if (first >= 0 && first + 15 < digits.length) {
+    const cut = first + 15;
+    let kept = digits.slice(0, cut);
+    const next = digits[cut];
+    const beyond = /[1-9]/.test(digits.slice(cut + 1));
+    const odd = (kept.charCodeAt(cut - 1) - 48) % 2 === 1;
+    if (next > '5' || (next === '5' && (beyond || odd))) {
+      const up = incrementDigits(kept);
+      if (up.length > kept.length) point++;
+      kept = up;
+    }
+    digits = kept.padEnd(point, '0');
+  }
+
+  // Round those digits half away from zero at the format's last place.
+  const end = point + maxDigits;
+  if (end < digits.length) {
+    let kept = digits.slice(0, end);
+    if (digits[end] >= '5') {
+      const up = incrementDigits(kept);
+      if (up.length > kept.length) point++;
+      kept = up;
+    }
+    digits = kept;
+  }
+
+  const whole = digits.slice(0, point).replace(/^0+(?=\d)/, '');
+  const fraction = digits.slice(point).replace(/0+$/, '');
+  const s = fraction === '' ? whole : whole + '.' + fraction;
+  return value < 0 || Object.is(value, -0) ? '-' + s : s;
 }
 
 /** C# `value.ToString("X2")` — uppercase two-digit hex. */

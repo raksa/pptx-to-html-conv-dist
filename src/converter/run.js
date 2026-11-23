@@ -525,7 +525,8 @@ module.exports = {
   },
 
   buildRandomBarSegments(totalPx, targetPx, minCount, maxCount, seedText) {
-    const segmentCount = Math.max(minCount, Math.min(maxCount, Math.round(totalPx / targetPx)));
+    // bankRound, as C# Math.Round: a 580 px tall slide at 40 px a bar is 14.5, so 14 bars, not 15.
+    const segmentCount = Math.max(minCount, Math.min(maxCount, bankRound(totalPx / targetPx)));
     if (segmentCount <= 0) return [];
 
     let state = { value: createDeterministicSeed(seedText) };

@@ -4,7 +4,7 @@
 
 const { childElements, descendants, attr, attrLong, firstChild, innerText, NS } = require('../ooxml/dom');
 const { placeholderOf, shapePropsOf, shapeTreeOf } = require('./elements');
-const { fmtTrim, f1 } = require('../util/format');
+const { fmt, fmtTrim, f1 } = require('../util/format');
 
 // Animation targets are keyed by shape id ("5"), or by "<shape id>#<paragraph index>" ("3#1")
 // when an effect builds a shape's text one paragraph at a time (<p:txEl><p:pRg>). The stage
@@ -337,7 +337,7 @@ function getStartOffset(from, to, horizontal, slideWidthPx, slideHeightPx) {
 }
 
 // Offsets under 0.05px print as 0.0; snapping them to zero also keeps a tiny negative value
-// from printing as "-0.0" (which .NET would write, unlike f1).
+// from printing as "-0.0" (which f1 writes, as .NET does).
 function normalizeMotionOffset(offsetPx) {
   return Math.abs(offsetPx) < 0.05 ? 0 : offsetPx;
 }
@@ -453,9 +453,12 @@ function buildAccelDecelTimingFunction(accel, decel) {
   return 'linear(' + stops.join(', ') + ')';
 }
 
-// FormatTrackNumber: up to `digits` decimals, rounded half-to-even like "F", never "-0".
+// FormatTrackNumber: up to `digits` decimals, rounded half-to-even like "F" (not fmtTrim, which
+// copies the custom "0.###" format and its rounding), and never "-0".
 function formatTrackNumber(value, digits) {
-  return fmtTrim(value, digits);
+  let text = fmt(value, digits);
+  if (text.includes('.')) text = text.replace(/0+$/, '').replace(/\.$/, '');
+  return text === '-0' ? '0' : text;
 }
 
 // ---- Tracks -------------------------------------------------------------------------------
@@ -2578,6 +2581,11 @@ module.exports = {
       )
     );
     return true;
+  },
+
+  // FormatTrackNumber (see formatTrackNumber above).
+  _formatTrackNumber(value, digits) {
+    return formatTrackNumber(value, digits);
   },
 
   // ParseLinearFormula: { constant, x, y, w, h } or null (see parseLinearFormula above).

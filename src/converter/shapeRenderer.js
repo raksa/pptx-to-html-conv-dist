@@ -23,7 +23,7 @@ const numOr = (el, name, def = 0) => {
 // choa slides (edge alpha 0.42, gone by 7 px).
 const InnerShadowBlurRadiusPerSigma = 3.0;
 
-// Values within half a display unit of zero print as 0, so C# never writes "-0.0" where JS writes "0.0".
+// Values within half a display unit of zero print as 0, never as the "-0.0" that "F1" writes for a tiny negative.
 const snapNearZero = (value) => (Math.abs(value) < 0.05 ? 0 : value);
 
 const ciIncludes = (hay, needle) => (hay || '').toLowerCase().includes(needle.toLowerCase());
